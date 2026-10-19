@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gridwright</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Libre+Franklin:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: a constructor's desk. Grid on the left as the work surface, a tabbed reference panel on the right. */
+:root {
+  --paper: #f3f5f9;
+  --panel: #ffffff;
+  --ink: #131923;
+  --muted: #5b6577;
+  --rule: #d4dae5;
+  --accent: #2350c4;        /* blue pencil */
+  --accent-ink: #ffffff;
+  --cell: #ffffff;
+  --block: #131923;
+  --hl: #fdf0a6;            /* current entry */
+  --sel: #f7cc3c;           /* current square */
+  --cross: #e6edfb;         /* crossing entry */
+  --pencil: #7d8aa3;
+  --good: #1d7f47;
+  --warn: #a8670f;
+  --bad: #be3328;
+  --font-ui: "Libre Franklin", "Franklin Gothic Medium", "Segoe UI", Arial, sans-serif;
+  --qbg: #f4f5f8;           /* Swedish clue square */
+  --dead: #c3c9d4;          /* Swedish empty square */
+  --zone: #ffe14d;          /* yellow zone */
+  --font-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  --font-clue: "Archivo Narrow", "Arial Narrow", "Roboto Condensed", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e1219; --panel: #151a23; --ink: #e6ebf3; --muted: #94a0b4; --rule: #29313f;
+    --accent: #7d9fff; --accent-ink: #0e1219; --cell: #262e3e; --block: #030406;
+    --hl: #4a4220; --sel: #8a6f12; --cross: #1f2b45; --pencil: #8794ad;
+    --good: #4fc985; --warn: #e2a64a; --bad: #ff7b6e; --qbg: #2e3647; --dead: #4a5263; --zone: #6e5f14; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0e1219; --panel: #151a23; --ink: #e6ebf3; --muted: #94a0b4; --rule: #29313f;
+  --accent: #7d9fff; --accent-ink: #0e1219; --cell: #262e3e; --block: #030406;
+  --hl: #4a4220; --sel: #8a6f12; --cross: #1f2b45; --pencil: #8794ad;
+  --good: #4fc985; --warn: #e2a64a; --bad: #ff7b6e; --qbg: #2e3647; --dead: #4a5263; --zone: #6e5f14; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 14px/1.45 var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column;
+}
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-block: 10px; border-bottom: 1px solid var(--rule);
+}
+.brand { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 22px; height: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--ink); border: 1px solid var(--ink); }
+.brand-mark i { background: var(--paper); }
+.brand-mark i.b { background: var(--ink); }
+.title-input {
+  flex: 1 1 200px; min-width: 0; border: 1px solid transparent; background: transparent;
+  font-size: 16px; font-weight: 600; padding: 4px 8px; border-radius: 4px;
+}
+.title-input:hover, .title-input:focus { border-color: var(--rule); background: var(--panel); }
+.bar-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+.btn {
+  border: 1px solid var(--rule); background: var(--panel); border-radius: 6px;
+  padding: 6px 11px; cursor: pointer; font-weight: 500; white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--bad); }
+.btn.small { padding: 3px 8px; font-size: 12.5px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+.menu { position: relative; }
+.menu > summary { list-style: none; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu-list {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 230px;
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 6px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / .14); display: grid;
+}
+.menu-list button { text-align: left; border: 0; background: none; padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+.menu-list button:hover { background: var(--cross); }
+.menu-list .sep { height: 1px; background: var(--rule); margin: 4px 2px; }
+.menu-list .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 6px 10px 2px; }
+
+/* ---------- Workspace ---------- */
+.workspace {
+  flex: 1; min-height: 0; display: grid; gap: 20px; padding-block: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+}
+.board { min-width: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; width: 100%; max-width: 680px; }
+.toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+.toolbar select { padding: 5px 6px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); }
+.spacer { flex: 1; }
+
+.grid-wrap { width: 100%; max-width: 680px; }
+.grid {
+  --n: 15;
+  display: grid; width: 100%; aspect-ratio: var(--w) / var(--h); max-width: 100%;
+  grid-template-columns: repeat(var(--w), 1fr); grid-template-rows: repeat(var(--h), 1fr);
+  border: 2px solid var(--ink); background: var(--ink); gap: 1px; user-select: none; outline: none;
+  container-type: inline-size;
+}
+.grid:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.cell { position: relative; background: var(--cell); cursor: pointer; overflow: hidden; }
+.cell.b { background: var(--block); }
+.cell.x { background: var(--cross); }
+.cell.h { background: var(--hl); }
+.cell.s { background: var(--sel); }
+.cell.b.s { background: color-mix(in srgb, var(--block) 70%, var(--sel)); }
+.cell .n {
+  position: absolute; top: 1px; left: 2px; font-size: calc(100cqi / var(--w) * 0.27); line-height: 1;
+  font-weight: 500; color: var(--ink);
+}
+.cell .l {
+  position: absolute; inset: 0; display: grid; place-items: center; padding-top: 12%;
+  font-size: calc(100cqi / var(--w) * 0.6); font-weight: 600; line-height: 1;
+}
+.cell .l.p { color: var(--pencil); font-weight: 400; }
+.cell.c::after {
+  content: ""; position: absolute; inset: 4%; border-radius: 50%; border: 1px solid var(--ink); opacity: .7; pointer-events: none;
+}
+.cell.bad .l { color: var(--bad); }
+
+.clue-bar {
+  width: 100%; max-width: 680px; display: flex; gap: 10px; align-items: center;
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px;
+}
+.clue-bar .tag { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.clue-bar input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 4px 2px; }
+.clue-bar input:focus { outline: none; }
+.hint { color: var(--muted); font-size: 12.5px; width: 100%; max-width: 680px; }
+kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--panel); }
+
+/* ---------- Side panel ---------- */
+.side { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.tabs { display: flex; border-bottom: 1px solid var(--rule); }
+.tabs button {
+  flex: 1; border: 0; background: none; padding: 10px 6px; cursor: pointer; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tabpanel { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 16px; }
+.section-h { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 700; margin: 14px 0 6px; }
+.section-h:first-child { margin-top: 0; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.field { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted); }
+.field input, .field select, .field textarea { border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; background: var(--paper); color: var(--ink); width: 100%; }
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--muted); }
+.status { font-size: 12.5px; padding: 8px 10px; border-radius: 6px; background: var(--paper); border: 1px solid var(--rule); }
+.status.ok { border-color: color-mix(in srgb, var(--good) 40%, var(--rule)); color: var(--good); }
+.status.err { border-color: color-mix(in srgb, var(--bad) 40%, var(--rule)); color: var(--bad); }
+
+/* Fill tab */
+.slot-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.slot-head .pat { font-family: var(--font-mono); font-size: 18px; letter-spacing: .12em; font-weight: 500; }
+.cands { display: grid; margin-top: 6px; }
+.cand {
+  display: grid; grid-template-columns: minmax(0, 1fr) 34px 64px; gap: 8px; align-items: center;
+  border: 0; background: none; text-align: left; padding: 5px 6px; border-radius: 5px; cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 60%, transparent);
+}
+.cand:hover { background: var(--cross); }
+.cand .w { font-family: var(--font-mono); font-weight: 500; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; }
+.cand .sc { font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); font-size: 12.5px; }
+.meter { height: 6px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--good); }
+.cand.dead .w { color: var(--bad); text-decoration: line-through; }
+.cand.dead .meter i { background: var(--bad); }
+.cand.dupe .w::after { content: " dupe"; font-family: var(--font-ui); font-size: 11px; color: var(--warn); letter-spacing: 0; }
+
+/* Clues tab */
+.clue-list { display: grid; gap: 2px; }
+.clue-row { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 4px 8px; padding: 6px; border-radius: 6px; cursor: pointer; }
+.clue-row.on { background: var(--hl); }
+.clue-row .num { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; padding-top: 5px; }
+.clue-row .ans { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; color: var(--muted); }
+.clue-row textarea { width: 100%; resize: none; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 4px 6px; min-height: 30px; field-sizing: content; }
+.clue-row textarea:hover, .clue-row textarea:focus { border-color: var(--rule); background: var(--panel); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; grid-column: 2; }
+.chip { font-size: 12px; border: 1px dashed var(--rule); border-radius: 12px; padding: 1px 8px; background: none; cursor: pointer; color: var(--muted); }
+
+/* Stats tab */
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
+.stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11.5px; color: var(--muted); }
+.bars { display: grid; gap: 3px; }
+.bar { display: grid; grid-template-columns: 26px minmax(0, 1fr) 28px; gap: 8px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.bar .track { height: 10px; background: var(--paper); border-radius: 3px; overflow: hidden; }
+.bar .track i { display: block; height: 100%; background: var(--accent); }
+.letters { display: grid; grid-template-columns: repeat(13, 1fr); gap: 3px; }
+.letters div { text-align: center; border: 1px solid var(--rule); border-radius: 4px; padding: 2px 0; font-size: 11px; }
+.letters div b { display: block; font-size: 13px; }
+.letters div.zero { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--rule)); }
+.issue { font-size: 13px; padding: 4px 0; }
+
+/* Dialogs */
+dialog { border: 1px solid var(--rule); border-radius: 12px; background: var(--panel); color: var(--ink); padding: 0; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+dialog::backdrop { background: rgb(10 14 22 / .45); }
+.dlg-h { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--rule); }
+.dlg-h h2 { margin: 0; font-size: 17px; }
+.dlg-b { padding: 14px 18px 18px; display: grid; gap: 14px; }
+.proj-list { display: grid; gap: 6px; max-height: 300px; overflow: auto; }
+.proj {
+  display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  border: 1px solid var(--rule); border-radius: 8px; padding: 8px;
+}
+.proj.current { border-color: var(--accent); }
+.proj canvas { width: 54px; height: 54px; image-rendering: pixelated; border: 1px solid var(--rule); }
+.proj .meta { min-width: 0; }
+.proj .meta b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj .meta span { font-size: 12px; color: var(--muted); }
+.new-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1.6fr; gap: 8px; align-items: end; }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--paper); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 50;
+  box-shadow: 0 8px 24px rgb(0 0 0 / .2); max-width: calc(100vw - 32px);
+}
+
+/* ---------- Swedish style (korsord) ---------- */
+body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv { display: none !important; }
+.grid.sv .cell.q { background: var(--qbg); }
+.grid.sv .cell.dead { background: var(--dead); }
+.grid.sv .cell.z { background: var(--zone); }
+.grid.sv .cell.z.h { background: color-mix(in srgb, var(--zone) 55%, var(--hl)); }
+.grid.sv .cell.qh { background: color-mix(in srgb, var(--qbg) 40%, var(--hl)); }
+.grid.sv .cell.s { background: var(--sel); }
+.cell.rg { box-shadow: inset 0 0 0 2px var(--accent); }
+.qbox { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.qt {
+  flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+  font-family: var(--font-clue); font-weight: 600; text-transform: uppercase; line-height: 1.04; letter-spacing: -0.01em;
+  font-size: calc(var(--k, 0.2) * 100cqi / var(--w)); padding: 0 5%; overflow: hidden;
+  hyphens: manual; overflow-wrap: normal; word-break: normal; white-space: pre-line; color: var(--ink);
+}
+.qt + .qt { border-top: 1px solid var(--ink); }
+.qt.empty { color: var(--muted); font-weight: 500; text-transform: none; font-style: italic; }
+.arw { position: absolute; inset: 0; pointer-events: none; }
+.arw svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.arw svg * { stroke: var(--ink); fill: none; stroke-width: 5; stroke-linecap: square; }
+.arw svg .head { fill: var(--ink); stroke: none; }
+.cell .k { position: absolute; pointer-events: none; background: var(--ink); }
+.cell.kr .k { top: 0; bottom: 0; right: -1px; width: calc(100cqi / var(--w) * 0.09); }
+.cell.kb .k { left: 0; right: 0; bottom: -1px; height: calc(100cqi / var(--w) * 0.09); }
+.cell.kr.kb .k { top: auto; left: auto; width: calc(100cqi / var(--w) * 0.09); height: calc(100cqi / var(--w) * 0.09); }
+.pic { position: relative; z-index: 2; overflow: hidden; background: var(--cell); cursor: pointer; }
+.pic img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.pic.on { outline: 3px solid var(--accent); outline-offset: -3px; }
+.pic .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+
+.sq-ed { width: 100%; max-width: 680px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.sq-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.sq-row textarea {
+  width: 100%; min-height: 54px; resize: vertical; border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px;
+  background: var(--paper); font-family: var(--font-clue); font-weight: 600; text-transform: uppercase; font-size: 15px;
+}
+.sq-tools { display: grid; gap: 6px; justify-items: end; }
+.arrow-pick { display: grid; grid-template-columns: repeat(6, 34px); gap: 4px; }
+.arrow-pick button { height: 34px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); cursor: pointer; padding: 3px; position: relative; }
+.arrow-pick button[aria-pressed="true"] { border-color: var(--accent); background: var(--cross); }
+.arrow-pick svg { width: 100%; height: 100%; }
+.arrow-pick svg * { stroke: var(--ink); fill: none; stroke-width: 7; }
+.arrow-pick svg .head { fill: var(--ink); stroke: none; }
+.arrow-pick svg .src { fill: var(--qbg); stroke: var(--muted); stroke-width: 3; }
+
+/* Print layout (Ingrid's print window equivalent) */
+#print-area { display: none; }
+@media print {
+  @page { margin: 14mm; }
+  body { background: #fff; color: #000; padding: 0; display: block; }
+  body > *:not(#print-area) { display: none !important; }
+  #print-area { display: block; font: 10pt/1.35 var(--font-ui); color: #000; }
+  #print-area h1 { font-size: 16pt; margin: 0 0 2px; }
+  #print-area .by { margin: 0 0 10px; color: #333; }
+  .pgrid { display: grid; border: 1.5pt solid #000; gap: 0; width: 100%; max-width: 120mm; margin-bottom: 8mm; }
+  .pgrid div { position: relative; border: .5pt solid #000; aspect-ratio: 1; }
+  .pgrid div.b { background: #000; }
+  .pgrid div.c::after { content: ""; position: absolute; inset: 6%; border: .5pt solid #000; border-radius: 50%; }
+  .pgrid small { position: absolute; top: 1px; left: 2px; font-size: 6pt; }
+  .pgrid span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11pt; font-weight: 600; padding-top: 2pt; }
+  .pclues { columns: 2; column-gap: 8mm; }
+  .pclues h3 { font-size: 11pt; margin: 0 0 3pt; }
+  .pclues p { margin: 0 0 2pt; break-inside: avoid; }
+  .pclues section { break-inside: avoid-column; margin-bottom: 6pt; }
+  .pbreak { break-before: page; }
+  #print-area .grid { width: 100%; max-width: 180mm; border-color: #000; background: #000; --qbg: #fff; --dead: #c8c8c8; --zone: #ffe14d; --ink: #000; --cell: #fff; }
+  #print-area .grid .cell { cursor: default; }
+  #print-area .grid.blank .l { display: none; }
+  #print-area .grid .qt.empty { visibility: hidden; }
+  #print-area .grid .cell.q .qt { color: #000; }
+}
+
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .side { min-height: 460px; }
+  .new-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i></span>Gridwright</div>
+  <input id="title" class="title-input" aria-label="Puzzle title" placeholder="Untitled puzzle">
+  <div class="bar-actions">
+    <button class="btn" id="btn-projects" title="Projects (Ctrl+O)">Projects</button>
+    <details class="menu" id="menu-file">
+      <summary class="btn">Import / Export</summary>
+      <div class="menu-list">
+        <div class="lbl">Export</div>
+        <button data-act="export-puz">Across Lite (.puz)</button>
+        <button data-act="export-ipuz">ipuz (.ipuz)</button>
+        <button data-act="export-clues-tsv">Clues as spreadsheet (.tsv)</button>
+        <button data-act="export-grid-tsv">Grid as spreadsheet (.tsv)</button>
+        <button data-act="export-json">Project backup (.json)</button>
+        <div class="sep"></div>
+        <div class="lbl">Import</div>
+        <button data-act="import-clues-tsv">Clues from spreadsheet (.tsv)…</button>
+        <button data-act="import-json">Project (.json or .ipuz)…</button>
+      </div>
+    </details>
+    <details class="menu" id="menu-print">
+      <summary class="btn">Print</summary>
+      <div class="menu-list">
+        <button data-act="print-blank">Puzzle (blank grid + clues)</button>
+        <button data-act="print-solution">Puzzle and solution</button>
+      </div>
+    </details>
+    <button class="btn" id="btn-theme" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <section class="board" aria-label="Grid editor">
+    <div class="toolbar">
+      <label class="only-am">Symmetry
+        <select id="symmetry">
+          <option value="rotational">Rotational</option>
+          <option value="leftRight">Left-Right</option>
+          <option value="topBottom">Top-Bottom</option>
+          <option value="NWSE">Diagonal (NW-SE)</option>
+          <option value="SWNE">Diagonal (NE-SW)</option>
+          <option value="None">None</option>
+        </select>
+      </label>
+      <button class="btn small only-am" id="btn-block" title="Toggle black square (.)">Block</button>
+      <button class="btn small only-am" id="btn-circle" title="Toggle circle (*)">Circle</button>
+      <button class="btn small only-sv" id="btn-clue-sq" title="Make the square a clue square (.)">Clue square</button>
+      <button class="btn small only-sv" id="btn-dead-sq" title="Make the square an empty grey square (#)">Grey square</button>
+      <button class="btn small only-sv" id="btn-letter-sq" title="Turn the square back into a letter square">Letter square</button>
+      <button class="btn small only-sv" id="btn-zone" title="Colour the selected squares yellow, or clear them">Yellow</button>
+      <button class="btn small only-sv" id="btn-break" title="Thick bar ending the word after this square (-)">Word end</button>
+      <button class="btn small only-sv" id="btn-pic" title="Put a picture over the selected squares">Picture…</button>
+      <button class="btn small only-sv danger" id="btn-pic-del" title="Remove the selected picture">Remove picture</button>
+      <span class="spacer"></span>
+      <button class="btn small" id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn small" id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
+    </div>
+    <div class="grid-wrap"><div class="grid" id="grid" tabindex="0" role="grid" aria-label="Crossword grid"></div></div>
+    <div class="sq-ed" id="sq-editor" hidden></div>
+    <div class="clue-bar" id="clue-bar">
+      <span class="tag" id="cur-tag">1A</span>
+      <input id="cur-clue" placeholder="Write a clue" aria-label="Clue for the current entry">
+    </div>
+    <p class="hint only-sv">Drag across squares (or Shift+click) to select an area for <b>Yellow</b> or <b>Picture…</b>. <kbd>.</kbd> makes a clue square, <kbd>#</kbd> a grey square, <kbd>-</kbd> a word-end bar. Select a clue square to write its clue and pick the arrow; press Enter in a clue for a new line and type - to split a long word. Answers run from the arrow until the next clue square, picture, edge or bar.</p>
+    <p class="hint only-am">Type letters to fill. <kbd>.</kbd> toggles a black square, <kbd>*</kbd> a circle. <kbd>Tab</kbd> jumps to the next entry, <kbd>Enter</kbd> or a second click switches direction, <kbd>Space</kbd> erases forward. Pencil letters (grey) come from autofill.</p>
+  </section>
+
+  <aside class="side">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="fill" aria-selected="true">Fill</button>
+      <button role="tab" data-tab="clues" aria-selected="false">Clues</button>
+      <button role="tab" data-tab="stats" aria-selected="false">Stats</button>
+      <button role="tab" data-tab="words" aria-selected="false">Word list</button>
+    </div>
+
+    <div class="tabpanel" id="tab-fill">
+      <div class="section-h">Autofill</div>
+      <div class="row">
+        <button class="btn primary" id="btn-autofill">Fill grid</button>
+        <button class="btn" id="btn-accept" disabled>Ink pencil</button>
+        <button class="btn" id="btn-clear-pencil" disabled>Erase pencil</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="field" style="width:130px">Time limit (seconds)<input id="time-limit" type="number" min="2" max="300" value="30"></label>
+        <label class="field" style="width:130px">Minimum word score<input id="min-score" type="number" min="0" max="100" value="50"></label>
+      </div>
+      <div id="fill-status" class="status" style="margin-top:8px" hidden></div>
+
+      <div class="section-h">Current entry</div>
+      <div class="slot-head"><b id="slot-label">1 Across</b><span class="pat" id="slot-pattern">?????</span></div>
+      <div class="row" style="margin-top:8px">
+        <input id="cand-filter" class="mono" placeholder="Filter, e.g. ing or ^re" aria-label="Filter suggestions" style="flex:1;min-width:0;border:1px solid var(--rule);border-radius:6px;padding:6px 8px;background:var(--paper)">
+        <select id="cand-sort" aria-label="Sort suggestions" style="border:1px solid var(--rule);border-radius:6px;padding:6px;background:var(--paper)">
+          <option value="recommended">Recommended</option>
+          <option value="score">Word score</option>
+          <option value="room">Crossing room</option>
+          <option value="alpha">A to Z</option>
+        </select>
+      </div>
+      <p class="muted" id="cand-summary" style="margin:8px 0 0;font-size:12.5px"></p>
+      <div class="cands" id="cands"></div>
+    </div>
+
+    <div class="tabpanel" id="tab-clues" hidden>
+      <div class="section-h" id="clues-A-h">Across</div>
+      <div class="clue-list" id="clues-A"></div>
+      <div class="section-h" id="clues-D-h">Down</div>
+      <div class="clue-list" id="clues-D"></div>
+    </div>
+
+    <div class="tabpanel" id="tab-stats" hidden>
+      <div class="stat-grid" id="stat-tiles"></div>
+      <div class="section-h">Checks</div>
+      <div id="stat-issues"></div>
+      <div class="section-h">Word lengths</div>
+      <div class="bars" id="stat-lengths"></div>
+      <div class="section-h">Letter counts</div>
+      <div class="letters" id="stat-letters"></div>
+      <div class="section-h">Puzzle details</div>
+      <div style="display:grid;gap:8px">
+        <label class="field">Author<input id="meta-author"></label>
+        <label class="field">Copyright<input id="meta-copyright"></label>
+        <label class="field">Notes<textarea id="meta-notes" rows="2"></textarea></label>
+      </div>
+    </div>
+
+    <div class="tabpanel" id="tab-words" hidden>
+      <div class="section-h">Active word list</div>
+      <label class="field">Word list
+        <select id="wl-choice">
+          <option value="bara">bara_ord (SALDO 2.3, 123,393 Swedish words)</option>
+          <option value="svfreq">Swedish frequency list (48,798 words, scored)</option>
+          <option value="en">English list (269,746 words)</option>
+          <option value="custom" disabled>Loaded file</option>
+        </select>
+      </label>
+      <div class="status" id="wl-status" style="margin-top:8px">Loading…</div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="btn-load-wl">Load another file…</button>
+      </div>
+      <p class="muted" style="font-size:12.5px"><b>bara_ord</b> is your list from <span class="mono" style="word-break:break-all">Downloads\saldo_2.3\saldo_2.3\bara_ord.txt</span>, built in so it works in any browser. Entries with digits were left out, multi-word and hyphenated entries are joined (ÖVREMEDELKLASS), and accents are folded (ANDRÉ becomes ANDRE). Scores come from SALDO's word classes: ordinary words 60, names 55, abbreviations 50, so autofill prefers ordinary words. Set the minimum word score to 51 to leave out abbreviations, or 56 to leave out names too. Gridwright also reads Ingrid's <span class="mono">word;score</span> format and plain one-word-per-line files.</p>
+      <div class="section-h">Quick add word</div>
+      <div class="row">
+        <input id="qa-word" class="mono" placeholder="WORD" style="flex:1;min-width:0;border:1px solid var(--rule);border-radius:6px;padding:6px 8px;background:var(--paper)" aria-label="Word to add">
+        <input id="qa-score" type="number" value="50" min="0" max="100" style="width:70px;border:1px solid var(--rule);border-radius:6px;padding:6px 8px;background:var(--paper)" aria-label="Score">
+        <button class="btn" id="btn-qa">Add</button>
+      </div>
+      <p class="muted" style="font-size:12.5px">Your added words are kept in this browser and layered on top of whichever list is loaded. A score of 0 blocks a word from autofill.</p>
+      <div id="qa-list" class="mono" style="font-size:12.5px;display:grid;gap:2px"></div>
+    </div>
+  </aside>
+</main>
+
+<dialog id="dlg-projects">
+  <div class="dlg-h"><h2>Projects</h2><button class="btn small" id="dlg-close">Close</button></div>
+  <div class="dlg-b">
+    <form id="new-form" class="new-grid">
+      <label class="field" style="grid-column:1/-1">Style
+        <select id="new-style">
+          <option value="american">American crossword (black squares, numbered clues)</option>
+          <option value="swedish">Swedish crossword (clues inside squares, arrows, pictures)</option>
+        </select>
+      </label>
+      <label class="field">Title<input id="new-title" placeholder="Untitled puzzle"></label>
+      <label class="field">Width<input id="new-w" type="number" min="3" max="25" value="15"></label>
+      <label class="field">Height<input id="new-h" type="number" min="3" max="25" value="15"></label>
+      <button class="btn primary" type="submit">New project</button>
+    </form>
+    <div class="proj-list" id="proj-list"></div>
+  </div>
+</dialog>
+
+<input type="file" id="file-input" hidden>
+<div class="toast" id="toast" hidden></div>
+<div id="print-area"></div>
+
+<script src="engine.js"></script>
+<script src="words.js"></script>
+<script src="words-sv.js"></script>
+<script src="words-bara-ord.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
