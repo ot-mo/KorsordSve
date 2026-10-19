@@ -202,6 +202,13 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .chips { display: flex; gap: 4px; flex-wrap: wrap; grid-column: 2; }
 .chip { font-size: 12px; border: 1px dashed var(--rule); border-radius: 12px; padding: 1px 8px; background: none; cursor: pointer; color: var(--muted); }
 
+/* Word lists tab */
+.wl-lists { display: grid; gap: 6px; }
+.wl-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
+.wl-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+.wl-row label { display: grid; gap: 1px; cursor: pointer; min-width: 0; }
+.wl-row small { color: var(--muted); font-size: 12px; }
+
 /* Stats tab */
 .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stat { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; }
@@ -245,6 +252,10 @@ dialog::backdrop { background: rgb(10 14 22 / .45); }
 body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv { display: none !important; }
 .grid.sv .cell.q { background: var(--qbg); }
 .grid.sv .cell.dead { background: var(--dead); }
+.grid.sv .cell.ta { background: var(--cell); }
+.qbox svg.thick { position: absolute; inset: 6%; width: 88%; height: 88%; }
+.qbox svg.thick path { stroke: var(--ink); stroke-width: 15; fill: none; stroke-linejoin: miter; stroke-linecap: butt; }
+.qbox svg.thick .head { fill: var(--ink); }
 .grid.sv .cell.z { background: var(--zone); }
 .grid.sv .cell.z.h { background: color-mix(in srgb, var(--zone) 55%, var(--hl)); }
 .grid.sv .cell.qh { background: color-mix(in srgb, var(--qbg) 40%, var(--hl)); }
@@ -374,6 +385,8 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
       <button class="btn small only-sv" id="btn-letter-sq" title="Turn the square back into a letter square">Letter square</button>
       <button class="btn small only-sv" id="btn-zone" title="Colour the selected squares yellow, or clear them">Yellow</button>
       <button class="btn small only-sv" id="btn-break" title="Thick bar ending the word after this square (-)">Word end</button>
+      <button class="btn small only-sv" id="btn-tri" title="Small triangle after this square: the sentence continues with its next word (&gt;)">Triangle ▸</button>
+      <button class="btn small only-sv" id="btn-thick" title="Thick arrow square: starts an answer whose clue is elsewhere, like a picture caption">Thick arrow</button>
       <button class="btn small only-sv" id="btn-pic" title="Put a picture over the selected squares">Picture…</button>
       <button class="btn small only-sv danger" id="btn-pic-del" title="Remove the selected picture">Remove picture</button>
       <span class="spacer"></span>
@@ -386,7 +399,7 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
       <span class="tag" id="cur-tag">1A</span>
       <input id="cur-clue" placeholder="Write a clue" aria-label="Clue for the current entry">
     </div>
-    <p class="hint only-sv">Drag across squares (or Shift+click) to select an area for <b>Yellow</b> or <b>Picture…</b>. <kbd>.</kbd> makes a clue square, <kbd>#</kbd> a grey square, <kbd>-</kbd> a word-end bar. Select a clue square to write its clue and pick the arrow; press Enter in a clue for a new line and type - to split a long word. Answers run from the arrow until the next clue square, picture, edge or bar.</p>
+    <p class="hint only-sv">Drag across squares (or Shift+click) to select an area for <b>Yellow</b> or <b>Picture…</b>. <kbd>.</kbd> makes a clue square, <kbd>#</kbd> a grey square, <kbd>-</kbd> a word-end bar, <kbd>&gt;</kbd> a small triangle that splits a sentence into words (the answer goes on, but each word must be in the word lists). <b>Thick arrow</b> turns a square into a big arrow that starts an answer, for example from a picture caption. Select a clue square to write its clue and pick the arrow; press Enter in a clue for a new line and type - to split a long word. Answers run from the arrow until the next clue square, picture, edge or bar.</p>
     <p class="hint only-am">Type letters to fill. <kbd>.</kbd> toggles a black square, <kbd>*</kbd> a circle. <kbd>Tab</kbd> jumps to the next entry, <kbd>Enter</kbd> or a second click switches direction, <kbd>Space</kbd> erases forward. Pencil letters (grey) come from autofill.</p>
   </section>
 
@@ -450,20 +463,14 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
     </div>
 
     <div class="tabpanel" id="tab-words" hidden>
-      <div class="section-h">Active word list</div>
-      <label class="field">Word list
-        <select id="wl-choice">
-          <option value="bara">bara_ord (SALDO 2.3, 123,393 Swedish words)</option>
-          <option value="svfreq">Swedish frequency list (48,798 words, scored)</option>
-          <option value="en">English list (269,746 words)</option>
-          <option value="custom" disabled>Loaded file</option>
-        </select>
-      </label>
+      <div class="section-h">Word lists</div>
+      <p class="muted" style="font-size:12.5px;margin:0 0 8px">Tick every list you want to use. They work together as one list; a word found in several lists keeps its highest score.</p>
+      <div class="wl-lists" id="wl-lists"></div>
       <div class="status" id="wl-status" style="margin-top:8px">Loading…</div>
       <div class="row" style="margin-top:8px">
-        <button class="btn" id="btn-load-wl">Load another file…</button>
+        <button class="btn" id="btn-load-wl">Load a list file…</button>
       </div>
-      <p class="muted" style="font-size:12.5px"><b>bara_ord</b> is your list from <span class="mono" style="word-break:break-all">Downloads\saldo_2.3\saldo_2.3\bara_ord.txt</span>, built in so it works in any browser. Entries with digits were left out, multi-word and hyphenated entries are joined (ÖVREMEDELKLASS), and accents are folded (ANDRÉ becomes ANDRE). Scores come from SALDO's word classes: ordinary words 60, names 55, abbreviations 50, so autofill prefers ordinary words. Set the minimum word score to 51 to leave out abbreviations, or 56 to leave out names too. Gridwright also reads Ingrid's <span class="mono">word;score</span> format and plain one-word-per-line files.</p>
+      <p class="muted" style="font-size:12.5px"><b>bara_ord</b> is your list from <span class="mono" style="word-break:break-all">Downloads\saldo_2.3\saldo_2.3\bara_ord.txt</span>, built in so it works in any browser. Entries with digits were left out, multi-word and hyphenated entries are joined (ÖVREMEDELKLASS), and accents are folded (ANDRÉ becomes ANDRE). Set the minimum word score to 51 to leave out its abbreviations, or 56 to leave out names too. Loaded files can use Ingrid's <span class="mono">word;score</span> format or one word per line, and stay in this browser.</p>
       <div class="section-h">Quick add word</div>
       <div class="row">
         <input id="qa-word" class="mono" placeholder="WORD" style="flex:1;min-width:0;border:1px solid var(--rule);border-radius:6px;padding:6px 8px;background:var(--paper)" aria-label="Word to add">

@@ -59,6 +59,7 @@ const idb = {
 let projects = store.get("gw.projects", {});
 let project = null;
 let geo = null;
+let fillGeo = null;                 // words for fill: answers, with sentences split at triangles
 let covered = new Uint8Array(0);   // squares under a picture
 let sel = { r: 0, c: 0 };
 let anchor = null;                  // other corner of a rectangular selection
@@ -66,7 +67,6 @@ let selPic = null;                  // id of the selected picture
 let dir = "A";
 let undoStack = [], redoStack = [];
 let index = null;
-let wordList = { kind: "bara", name: "bara_ord (SALDO 2.3)", text: null, scored: true };
 let custom = store.get("gw.custom", []);
 let clueBank = store.get("gw.cluebank", {});
 let worker = null, workerReady = false, filling = false, fillSeq = 0;
@@ -90,8 +90,21 @@ const CELL_ARROW = {
   "right-down": `<path d="M0 15 H20 V30"/>` + headD(20, 42),
   "up-right": `<path d="M15 100 V80 H30"/>` + headR(42, 80),
   "left-down": `<path d="M100 15 H80 V30"/>` + headD(80, 42),
+  // Small triangles on a square's right or bottom edge: the sentence goes on with its next word.
+  "tri-r": `<polygon class="head" points="80,35 100,50 80,65"/>`,
+  "tri-b": `<polygon class="head" points="35,80 50,100 65,80"/>`,
 };
 const cellArrowSvg = (a) => `<svg viewBox="0 0 100 100" aria-hidden="true">${CELL_ARROW[a]}</svg>`;
+// Thick arrows fill a whole square and start an answer, for example from a picture caption.
+const THICK_ARROW = {
+  right: `<path d="M8 50 H60"/><polygon class="head" points="56,24 94,50 56,76"/>`,
+  down: `<path d="M50 8 V60"/><polygon class="head" points="24,56 50,94 76,56"/>`,
+  "down-right": `<path d="M28 6 V56 H60"/><polygon class="head" points="56,30 94,56 56,82"/>`,
+  "right-down": `<path d="M6 28 H56 V60"/><polygon class="head" points="30,56 56,94 82,56"/>`,
+  "up-right": `<path d="M28 94 V44 H60"/><polygon class="head" points="56,18 94,44 56,70"/>`,
+  "left-down": `<path d="M94 28 H44 V60"/><polygon class="head" points="18,56 44,94 70,56"/>`,
+};
+const thickArrowSvg = (a) => `<svg class="thick" viewBox="0 0 100 100" aria-hidden="true">${THICK_ARROW[a] || ""}</svg>`;
 // Picker icons show the clue square (grey) and the path of the answer.
 const PICK_ARROW = {
   right: `<rect class="src" x="2" y="30" width="38" height="40"/><path d="M44 50 H80"/>` + headR(94, 50),
@@ -198,6 +211,7 @@ const clueKey = (s) => `${s.r},${s.c},${s.dir}`;
 const slotText = (s, fill = "?") => s.cells.map((i) => eff(i) || fill).join("");
 const slotComplete = (s) => s.cells.every((i) => eff(i));
 const isLetterCell = (i) => !project.blocks[i] && !covered[i];
+const hasClues = (i) => project.blocks[i] === 1 || project.blocks[i] === 3; // clue square or thick arrow square
 const letterCode = (l) => (l ? E.code(l.toLowerCase()) ?? -1 : -1);
 const inkCodes = () => project.letters.map(letterCode);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -240,12 +254,27 @@ function recomputeGeo() {
     geo.problems = problems;
     geo.arrowsAt = new Map();
     for (const s of geo.slots) {
+      if (project.blocks[s.clueCell] === 3) continue; // a thick arrow square already shows its arrow
       const list = geo.arrowsAt.get(s.cells[0]) || [];
       list.push(s.arrow);
       geo.arrowsAt.set(s.cells[0], list);
     }
+    // Small triangles split a sentence into words. The clue covers the whole answer,
+    // but for fill suggestions and autofill each word (2+ letters) must be in the word list.
+    const words = [];
+    for (const s of geo.slots) {
+      const bit = s.dir === "A" ? 4 : 8;
+      const parts = [[]];
+      s.cells.forEach((i, p) => {
+        parts[parts.length - 1].push(i);
+        if (project.breaks[i] & bit && p < s.cells.length - 1) parts.push([]);
+      });
+      parts.forEach((cells, k) => { if (cells.length >= 2) words.push({ dir: s.dir, cells, parent: s.id, part: k + 1, parts: parts.length }); });
+    }
+    fillGeo = E.geoFromSlots(w, h, words);
   } else {
     geo = E.computeSlots(w, h, project.blocks);
+    fillGeo = geo;
   }
 }
 
@@ -255,6 +284,20 @@ function currentSlot() {
   if (!isLetterCell(i)) return null;
   const ref = geo.cellSlots[i][dir] || geo.cellSlots[i][dir === "A" ? "D" : "A"];
   return ref ? geo.slots[ref.s] : null;
+}
+
+// The word being filled: the whole answer, or one word of a sentence split by triangles.
+function currentFillSlot() {
+  const ans = currentSlot();
+  if (!ans || fillGeo === geo) return ans;
+  const ref = fillGeo.cellSlots[idx(sel.r, sel.c)][ans.dir];
+  const fs = ref ? fillGeo.slots[ref.s] : null;
+  return fs && fs.parent === ans.id ? fs : null;
+}
+const answerOf = (fs) => (fillGeo === geo ? fs : geo.slots[fs.parent]);
+function fillLabel(fs) {
+  const base = slotLabel(answerOf(fs));
+  return fs.parts > 1 ? `${base} · word ${fs.part} of ${fs.parts}` : base;
 }
 
 function toast(msg, ms = 2800) {
@@ -310,47 +353,110 @@ function redo() {
   saveSoon(); render();
 }
 
-// ---------- word list ----------
-function applyCustom(map) {
-  for (const [w, s] of custom) map.set(w, s);
-  return map;
-}
-
-// Built-in lists; bara_ord (from SALDO) is the default for every project.
-const BUILTIN_LISTS = {
-  bara: { name: "bara_ord (SALDO 2.3)", text: () => window.BARA_ORD, scored: true },
-  svfreq: { name: "Swedish frequency list", text: () => window.SWEDISH_WORDS, scored: true },
-  en: { name: "English list", text: () => window.STARTER_WORDS, scored: false },
-};
+// ---------- word lists ----------
+// Any number of lists can be on at once. They are merged into one index:
+// a word found in several lists keeps its highest score, and your added words override all.
+const BUILTIN_LISTS = [
+  { id: "bara", name: "bara_ord (SALDO 2.3)", note: "123,393 Swedish words. Ordinary words 60, names 55, abbreviations 50.", text: () => window.BARA_ORD },
+  { id: "svfreq", name: "Swedish frequency list", note: "48,798 words, scored 30 to 60 by how common they are.", text: () => window.SWEDISH_WORDS },
+  { id: "en", name: "English list", note: "269,746 words, all scored 50.", text: () => window.STARTER_WORDS },
+];
+let loadedFiles = [];                         // [{id, name, text}] kept in IndexedDB
+let enabledLists = store.get("gw.lists", null); // {listId: true}
+const lineCount = (text) => (text.match(/\n/g) || []).length + 1;
 
 async function loadWordList() {
-  let choice = store.get("gw.list", "bara");
-  const saved = await idb.get("wordlist");
-  const customOpt = $("wl-choice").querySelector('option[value="custom"]');
-  customOpt.disabled = !(saved && saved.text);
-  if (saved && saved.text) customOpt.textContent = `Loaded file: ${saved.name}`;
-  if (choice === "custom" && saved && saved.text) {
-    wordList = { kind: "custom", name: saved.name, text: saved.text, scored: /;\s*\d+/.test(saved.text.slice(0, 2000)) };
-  } else {
-    if (!BUILTIN_LISTS[choice]) choice = "bara";
-    const b = BUILTIN_LISTS[choice];
-    wordList = { kind: choice, name: b.name, text: b.text() || "", scored: b.scored };
+  loadedFiles = (await idb.get("wordlists")) || [];
+  // Move a file loaded with an earlier version (one file only) into the new list of files.
+  const old = await idb.get("wordlist");
+  if (old && old.text) {
+    loadedFiles.push({ id: uid(), name: old.name, text: old.text });
+    await idb.set("wordlists", loadedFiles);
+    await idb.del("wordlist");
   }
-  $("wl-choice").value = wordList.kind;
+  if (!enabledLists) {
+    const prev = store.get("gw.list", "bara");
+    const id = prev === "custom" && loadedFiles[0] ? loadedFiles[0].id : BUILTIN_LISTS.some((b) => b.id === prev) ? prev : "bara";
+    enabledLists = { [id]: true };
+    store.set("gw.lists", enabledLists);
+  }
+  renderListChoices();
   rebuildIndex();
 }
 
+function activeSources() {
+  const out = [];
+  for (const b of BUILTIN_LISTS) if (enabledLists[b.id]) out.push({ name: b.name, text: b.text() || "" });
+  for (const f of loadedFiles) if (enabledLists[f.id]) out.push({ name: f.name, text: f.text });
+  return out;
+}
+
+function setListEnabled(id, on) {
+  enabledLists[id] = on;
+  if (!on) delete enabledLists[id];
+  if (!Object.keys(enabledLists).length) {
+    enabledLists.bara = true;
+    toast("At least one list has to be on, so bara_ord was turned back on.");
+  }
+  store.set("gw.lists", enabledLists);
+  renderListChoices();
+  rebuildIndex();
+}
+
+function renderListChoices() {
+  const host = $("wl-lists");
+  host.innerHTML = "";
+  const all = [
+    ...BUILTIN_LISTS,
+    ...loadedFiles.map((f) => ({ id: f.id, name: f.name, note: `Your file, ${lineCount(f.text).toLocaleString()} lines.`, file: true })),
+  ];
+  for (const l of all) {
+    const row = document.createElement("div");
+    row.className = "wl-row";
+    row.innerHTML = `<input type="checkbox" id="wl-${l.id}"><label for="wl-${l.id}"><b></b><small></small></label>`;
+    row.querySelector("b").textContent = l.name;
+    row.querySelector("small").textContent = l.note;
+    const box = row.querySelector("input");
+    box.checked = !!enabledLists[l.id];
+    box.addEventListener("change", () => setListEnabled(l.id, box.checked));
+    if (l.file) {
+      const rm = document.createElement("button");
+      rm.type = "button"; rm.className = "btn small danger"; rm.textContent = "Remove";
+      rm.addEventListener("click", async () => {
+        if (rm.dataset.armed !== "1") { rm.dataset.armed = "1"; rm.textContent = "Confirm remove"; return; }
+        loadedFiles = loadedFiles.filter((f) => f.id !== l.id);
+        await idb.set("wordlists", loadedFiles);
+        setListEnabled(l.id, false);
+        toast(`Removed ${l.name}`);
+      });
+      row.appendChild(rm);
+    }
+    host.appendChild(row);
+  }
+}
+
+async function addWordListFile(text, name) {
+  const f = { id: uid(), name, text };
+  loadedFiles.push(f);
+  await idb.set("wordlists", loadedFiles);
+  toast(`Loaded ${name}. It is on together with your other lists.`);
+  setListEnabled(f.id, true);
+}
+
 function rebuildIndex() {
+  const sources = activeSources();
   $("wl-status").className = "status";
-  $("wl-status").textContent = "Indexing word list…";
+  $("wl-status").textContent = "Indexing word lists…";
   index = null;
   setTimeout(() => {
     const t0 = performance.now();
-    index = new E.WordIndex(applyCustom(E.parseWordList(wordList.text)));
+    index = new E.WordIndex(E.mergeWordLists(sources.map((s) => s.text), custom));
     index.setMinScore(minScore());
     const ms = Math.round(performance.now() - t0);
     $("wl-status").className = "status ok";
-    $("wl-status").textContent = `${wordList.name}: ${index.size.toLocaleString()} words${wordList.scored ? "" : " (unscored, every word counts as 50)"}. Indexed in ${ms} ms.`;
+    $("wl-status").textContent = sources.length === 1
+      ? `Using ${sources[0].name}: ${index.size.toLocaleString()} words. Indexed in ${ms} ms.`
+      : `Using ${sources.length} lists together: ${index.size.toLocaleString()} different words in total. Indexed in ${ms} ms.`;
     startWorker();
     render();
   }, 20);
@@ -369,7 +475,7 @@ function startWorker() {
     worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
     worker.onmessage = onWorkerMessage;
     worker.onerror = () => { worker = null; };
-    worker.postMessage({ type: "load", text: wordList.text, custom, minScore: minScore() });
+    worker.postMessage({ type: "load", texts: activeSources().map((src) => src.text), custom, minScore: minScore() });
   } catch {
     worker = null; // fall back to filling on the page
   }
@@ -401,7 +507,7 @@ function startFill() {
     w: project.w, h: project.h,
     blocks: project.blocks.map((b, i) => (b || covered[i] ? 1 : 0)),
     letters: inkCodes(),
-    slotDefs: isSv() ? geo.slots.map((s) => ({ dir: s.dir, cells: s.cells, label: slotLabel(s) })) : undefined,
+    slotDefs: isSv() ? fillGeo.slots.map((s) => ({ dir: s.dir, cells: s.cells, label: fillLabel(s) })) : undefined,
   };
   const opts = { timeLimitMs: seconds * 1000, seed: Math.floor(Math.random() * 1e9) };
   filling = true;
@@ -428,7 +534,7 @@ function finishFill(res) {
   $("btn-autofill").textContent = "Fill grid";
   if (!res.ok) {
     setFillStatus(res.reason || "No fill found.", "err");
-    if (res.slot != null && geo.slots[res.slot]) selectSlot(geo.slots[res.slot]);
+    if (res.slot != null && fillGeo.slots[res.slot]) selectSlot(fillGeo.slots[res.slot]);
     return;
   }
   mutate(() => {
@@ -470,7 +576,8 @@ function toggleCircle(r, c) {
   mutate(() => { project.circles[i] = project.circles[i] ? 0 : 1; });
 }
 
-// Swedish: kind 0 = letter square, 1 = clue square, 2 = grey square. Applies to the whole selection.
+// Swedish: kind 0 = letter square, 1 = clue square, 2 = grey square, 3 = thick arrow square
+// (starts an answer whose clue is elsewhere, such as a picture caption). Applies to the whole selection.
 function defaultClue(i) {
   const r = Math.floor(i / project.w), c = i % project.w;
   const letter = (rr, cc) => inBounds(rr, cc) && isLetterCell(idx(rr, cc));
@@ -486,13 +593,29 @@ function setKind(kind, cells = regionCells()) {
     for (const i of cells) {
       project.blocks[i] = kind;
       if (kind) { project.letters[i] = ""; project.pencil[i] = ""; }
-      if (kind !== 1) delete project.sclues[i];
+      if (kind !== 1 && kind !== 3) delete project.sclues[i];
     }
-    if (kind === 1) {
+    if (kind === 1 || kind === 3) {
       recomputeGeo();
-      for (const i of cells) if (!project.sclues[i]) project.sclues[i] = [defaultClue(i)];
+      for (const i of cells) {
+        const list = project.sclues[i] || [defaultClue(i)];
+        if (!list.length) list.push(defaultClue(i));
+        // A thick arrow square holds one answer; a clue square holds up to two.
+        project.sclues[i] = kind === 3
+          ? [{ ...list[0], thick: true }]
+          : list.map(({ thick, ...q }) => q);
+      }
     }
   }, { structural: true });
+}
+
+// The same edge can carry a word-end bar or a sentence triangle, not both.
+function toggleEdgeMark(kind) {
+  const i = idx(sel.r, sel.c);
+  if (!isLetterCell(i)) { toast(kind === "bar" ? "Word-end bars go on letter squares." : "Triangles go on letter squares."); return; }
+  const bar = dir === "A" ? 1 : 2, tri = dir === "A" ? 4 : 8;
+  const [on, off] = kind === "bar" ? [bar, tri] : [tri, bar];
+  mutate(() => { project.breaks[i] = (project.breaks[i] ^ on) & ~off; }, { structural: true });
 }
 
 function toggleZone() {
@@ -502,12 +625,8 @@ function toggleZone() {
   mutate(() => { for (const i of cells) project.zones[i] = allOn ? 0 : 1; });
 }
 
-function toggleBreak() {
-  const i = idx(sel.r, sel.c);
-  if (!isLetterCell(i)) { toast("Word-end bars go on letter squares."); return; }
-  const bit = dir === "A" ? 1 : 2;
-  mutate(() => { project.breaks[i] ^= bit; }, { structural: true });
-}
+const toggleBreak = () => toggleEdgeMark("bar");
+const toggleTriangle = () => toggleEdgeMark("triangle");
 
 function step(r, c, d, k = 1) {
   return d === "A" ? [r, c + k] : [r + k, c];
@@ -520,7 +639,7 @@ function advance(k = 1) {
 
 function typeLetter(ch) {
   const i = idx(sel.r, sel.c);
-  if (isSv() && project.blocks[i] === 1) { focusSquareClue(0, ch); return; }
+  if (isSv() && hasClues(i)) { focusSquareClue(0, ch); return; }
   if (!isLetterCell(i)) return;
   mutate(() => { project.letters[i] = ch; project.pencil[i] = ""; });
   advance(1);
@@ -595,7 +714,7 @@ function onGridKey(e) {
     e.preventDefault(); nextSlot(e.shiftKey ? -1 : 1);
   } else if (k === "Enter") {
     e.preventDefault();
-    if (isSv() && project.blocks[idx(sel.r, sel.c)] === 1) { focusSquareClue(0); return; }
+    if (isSv() && hasClues(idx(sel.r, sel.c))) { focusSquareClue(0); return; }
     dir = dir === "A" ? "D" : "A"; render();
   } else if (k === "Backspace") {
     e.preventDefault(); erase(false);
@@ -609,6 +728,8 @@ function onGridKey(e) {
     e.preventDefault(); setKind(project.blocks[idx(sel.r, sel.c)] === 2 ? 0 : 2);
   } else if (k === "-" && isSv()) {
     e.preventDefault(); toggleBreak();
+  } else if (k === ">" && isSv()) {
+    e.preventDefault(); toggleTriangle();
   } else if (k === "*" && !isSv()) {
     e.preventDefault(); toggleCircle(sel.r, sel.c);
   } else if (k === "Escape") {
@@ -722,7 +843,7 @@ function deadCells() {
   const bad = new Set();
   if (!index) return bad;
   const codes = inkCodes();
-  for (const s of geo.slots) {
+  for (const s of fillGeo.slots) {
     const pat = s.cells.map((i) => codes[i]);
     if (pat.every((x) => x < 0) || pat.every((x) => x >= 0)) continue;
     if (index.count(index.match(pat)) === 0) s.cells.forEach((i) => bad.add(i));
@@ -750,6 +871,7 @@ function render() {
     if (sv) {
       if (b === 1) cls += " q";
       else if (b === 2) cls += " dead";
+      else if (b === 3) cls += " ta";
       if (project.zones[i]) cls += " z";
       if (!b && project.breaks[i] & 1) cls += " kr";
       if (!b && project.breaks[i] & 2) cls += " kb";
@@ -774,17 +896,23 @@ function render() {
 
     // Swedish clue text inside the square, and arrows in answer squares.
     const clues = sv && b === 1 ? project.sclues[i] || [] : null;
-    const qKey = clues ? JSON.stringify(clues.map((q) => q.text)) : "";
+    const thick = sv && b === 3 ? ((project.sclues[i] || [])[0] || {}).arrow || "right" : null;
+    const qKey = clues ? JSON.stringify(clues.map((q) => q.text)) : thick ? "thick:" + thick : "";
     if (qKey !== ce.qKey) {
       ce.qKey = qKey;
-      ce.q.innerHTML = clues
+      ce.q.innerHTML = thick ? thickArrowSvg(thick) : clues
         ? (clues.length ? clues : [{ text: "" }]).map((q) => q.text.trim()
           ? `<span class="qt">${esc(q.text.trim())}</span>`
           : `<span class="qt empty">clue</span>`).join("")
         : "";
       if (clues) toFit.add(i);
     }
-    const arrows = sv ? geo.arrowsAt.get(i) : null;
+    let arrows = sv ? geo.arrowsAt.get(i) || [] : [];
+    if (sv && !b) {
+      if (project.breaks[i] & 4) arrows = [...arrows, "tri-r"];
+      if (project.breaks[i] & 8) arrows = [...arrows, "tri-b"];
+    }
+    if (!arrows.length) arrows = null;
     const aKey = arrows ? arrows.join() : "";
     if (aKey !== ce.aKey) { ce.aKey = aKey; ce.a.innerHTML = arrows ? arrows.map(cellArrowSvg).join("") : ""; }
   }
@@ -792,7 +920,7 @@ function render() {
   fitClues();
 
   // under the grid: clue square editor (Swedish) or the current entry's clue
-  const onClueSquare = sv && project.blocks[i0] === 1 && !covered[i0];
+  const onClueSquare = sv && hasClues(i0) && !covered[i0];
   $("sq-editor").hidden = !onClueSquare;
   $("clue-bar").hidden = onClueSquare;
   if (onClueSquare) renderSquareEditor(i0);
@@ -818,6 +946,10 @@ function render() {
   $("btn-circle").classList.toggle("on", !!project.circles[i0] && !project.blocks[i0]);
   $("btn-block").classList.toggle("on", !!project.blocks[i0]);
   $("btn-clue-sq").classList.toggle("on", project.blocks[i0] === 1);
+  $("btn-thick").classList.toggle("on", project.blocks[i0] === 3);
+  const triBit = dir === "A" ? 4 : 8, barBit = dir === "A" ? 1 : 2;
+  $("btn-tri").classList.toggle("on", !!(project.breaks[i0] & triBit) && isLetterCell(i0));
+  $("btn-break").classList.toggle("on", !!(project.breaks[i0] & barBit) && isLetterCell(i0));
   $("btn-dead-sq").classList.toggle("on", project.blocks[i0] === 2);
   $("btn-pic-del").disabled = !(selPic || covered[i0]);
 
@@ -851,14 +983,17 @@ let sqKey = "";
 function renderSquareEditor(i) {
   const host = $("sq-editor");
   const clues = project.sclues[i] || [];
-  const key = i + "|" + clues.map((q) => q.arrow).join();
+  const thick = project.blocks[i] === 3;
+  const key = i + "|" + thick + "|" + clues.map((q) => q.arrow).join();
   if (key !== sqKey) {
     sqKey = key;
     host.innerHTML = "";
     clues.forEach((q, k) => {
       const row = document.createElement("div");
       row.className = "sq-row";
-      row.innerHTML = `<label class="field">${clues.length > 1 ? (k === 0 ? "Upper clue" : "Lower clue") : "Clue"}<textarea rows="2" placeholder="Skriv ledtråden" data-k="${k}"></textarea></label>
+      const label = thick ? "Thick arrow: clue for this answer (not printed in the grid, e.g. the picture caption)"
+        : clues.length > 1 ? (k === 0 ? "Upper clue" : "Lower clue") : "Clue";
+      row.innerHTML = `<label class="field">${label}<textarea rows="2" placeholder="${thick ? "Bildtext eller ledtråd" : "Skriv ledtråden"}" data-k="${k}"></textarea></label>
         <div class="sq-tools"><div class="arrow-pick" role="group" aria-label="Arrow"></div></div>`;
       const ta = row.querySelector("textarea");
       ta.value = q.text;
@@ -876,15 +1011,17 @@ function renderSquareEditor(i) {
         b.addEventListener("click", () => mutate(() => { project.sclues[i][k].arrow = a; }, { structural: true }));
         pick.appendChild(b);
       }
-      const rm = document.createElement("button");
-      rm.type = "button"; rm.className = "btn small danger"; rm.textContent = "Remove clue";
-      rm.addEventListener("click", () => mutate(() => { project.sclues[i].splice(k, 1); }, { structural: true }));
-      row.querySelector(".sq-tools").appendChild(rm);
+      if (!thick) {
+        const rm = document.createElement("button");
+        rm.type = "button"; rm.className = "btn small danger"; rm.textContent = "Remove clue";
+        rm.addEventListener("click", () => mutate(() => { project.sclues[i].splice(k, 1); }, { structural: true }));
+        row.querySelector(".sq-tools").appendChild(rm);
+      }
       host.appendChild(row);
     });
     const actions = document.createElement("div");
     actions.className = "row";
-    if (clues.length < 2) {
+    if (!thick && clues.length < 2) {
       const add = document.createElement("button");
       add.type = "button"; add.className = "btn small";
       add.textContent = clues.length ? "Add a second clue" : "Add a clue";
@@ -948,21 +1085,23 @@ let fillTimer = null;
 function renderFillSoon() { clearTimeout(fillTimer); fillTimer = setTimeout(renderFill, 30); }
 
 function renderFill() {
-  const slot = currentSlot();
+  const slot = currentFillSlot();
   const list = $("cands");
   if (!slot) {
-    $("slot-label").textContent = "No answer selected";
+    $("slot-label").textContent = currentSlot() ? "One-letter word" : "No answer selected";
     $("slot-pattern").textContent = "";
-    $("cand-summary").textContent = isSv() ? "Select a letter square that belongs to an answer to see words that fit." : "Select a white square to see words that fit.";
+    $("cand-summary").textContent = currentSlot()
+      ? "This square is a one-letter word in a sentence, so any letter is allowed here."
+      : isSv() ? "Select a letter square that belongs to an answer to see words that fit." : "Select a white square to see words that fit.";
     list.innerHTML = "";
     return;
   }
-  const label = slotLabel(slot);
-  $("slot-label").textContent = `${label.length > 44 ? label.slice(0, 43) + "…" : label} · ${slot.len} letters`;
+  const label = fillLabel(slot);
+  $("slot-label").textContent = `${label.length > 52 ? label.slice(0, 51) + "…" : label} · ${slot.len} letters`;
   $("slot-pattern").textContent = slot.cells.map((i) => project.letters[i] || "·").join("");
   if (!index) { $("cand-summary").textContent = "Word list is loading…"; return; }
 
-  const { total, list: cands } = E.candidatesFor(index, geo, inkCodes(), slot.id, 600);
+  const { total, list: cands } = E.candidatesFor(index, fillGeo, inkCodes(), slot.id, 600);
   let rows = cands;
   const f = $("cand-filter").value.trim().toLowerCase();
   if (f) {
@@ -1123,7 +1262,13 @@ function renderStats() {
     });
     if (asym) issues.push(["warn", "The black squares don't match the chosen symmetry"]);
   }
-  if (index) for (const s of slots) if (slotComplete(s) && !index.scores.has(slotText(s).toLowerCase())) issues.push(["warn", `${slotText(s)} (${name(s)}) isn't in the word list`]);
+  if (index) {
+    for (const s of fillGeo.slots) {
+      if (!slotComplete(s) || index.scores.has(slotText(s).toLowerCase())) continue;
+      const where = s.parts > 1 ? `word ${s.part} of ${name(answerOf(s))}` : name(answerOf(s));
+      issues.push(["warn", `${slotText(s)} (${where}) isn't in the word lists`]);
+    }
+  }
   $("stat-issues").innerHTML = issues.length
     ? issues.map(([k, t]) => `<div class="issue" style="color:var(--${k === "bad" ? "bad" : "warn"})">${esc(t)}</div>`).join("")
     : `<div class="issue" style="color:var(--good)">No problems found.</div>`;
@@ -1177,7 +1322,7 @@ function thumb(p) {
   for (let i = 0; i < p.w * p.h; i++) {
     const b = p.blocks[i];
     ctx.fillStyle = p.style === "swedish"
-      ? (b === 1 ? col("--qbg") : b === 2 ? col("--dead") : p.zones && p.zones[i] ? col("--zone") : col("--cell"))
+      ? (b === 1 || b === 3 ? col("--qbg") : b === 2 ? col("--dead") : p.zones && p.zones[i] ? col("--zone") : col("--cell"))
       : b ? col("--ink") : (p.letters[i] || p.pencil[i]) ? col("--hl") : col("--cell");
     ctx.fillRect(i % p.w, Math.floor(i / p.w), 1, 1);
   }
@@ -1622,6 +1767,12 @@ function wire() {
   $("btn-letter-sq").addEventListener("click", () => { setKind(0); grid.focus(); });
   $("btn-zone").addEventListener("click", () => { toggleZone(); grid.focus(); });
   $("btn-break").addEventListener("click", () => { toggleBreak(); grid.focus(); });
+  $("btn-tri").addEventListener("click", () => { toggleTriangle(); grid.focus(); });
+  $("btn-thick").addEventListener("click", () => {
+    if (project.blocks[idx(sel.r, sel.c)] === 3) { setKind(0); grid.focus(); return; }
+    setKind(3);
+    focusSquareClue(0);
+  });
   $("btn-pic").addEventListener("click", addPicture);
   $("btn-pic-del").addEventListener("click", () => { removePicture(); grid.focus(); });
   $("btn-undo").addEventListener("click", undo);
@@ -1650,16 +1801,7 @@ function wire() {
 
   for (const f of ["author", "copyright", "notes"]) $("meta-" + f).addEventListener("input", (e) => { project[f] = e.target.value; saveSoon(); });
 
-  $("btn-load-wl").addEventListener("click", () => pickFile(".dict,.txt,.tsv,.csv,text/plain", async (text, name) => {
-    await idb.set("wordlist", { name, text });
-    store.set("gw.list", "custom");
-    await loadWordList();
-    toast(`Loaded ${name}`);
-  }));
-  $("wl-choice").addEventListener("change", (e) => {
-    store.set("gw.list", e.target.value);
-    loadWordList();
-  });
+  $("btn-load-wl").addEventListener("click", () => pickFile(".dict,.txt,.tsv,.csv,text/plain", addWordListFile));
   $("btn-qa").addEventListener("click", addCustomWord);
   $("qa-word").addEventListener("keydown", (e) => { if (e.key === "Enter") addCustomWord(); });
 

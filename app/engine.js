@@ -39,6 +39,19 @@ function GridEngineFactory() {
     return map;
   }
 
+  // Several lists at once: a word found in more than one list keeps its highest score.
+  function mergeWordLists(texts, custom = []) {
+    const map = new Map();
+    for (const text of texts) {
+      for (const [w, s] of parseWordList(text)) {
+        const prev = map.get(w);
+        if (prev === undefined || s > prev) map.set(w, s);
+      }
+    }
+    for (const [w, s] of custom) map.set(w, s);
+    return map;
+  }
+
   class WordIndex {
     constructor(map) {
       this.scores = map;
@@ -368,7 +381,7 @@ function GridEngineFactory() {
     return { ok: false, reason: `No fill found within ${Math.round(timeLimit / 1000)} seconds. Try more time, a lower minimum score, or fewer locked letters.`, attempts, nodes: totalNodes };
   }
 
-  return { ALPHA, NL, code, normalize, parseWordList, WordIndex, computeSlots, geoFromSlots, swedishSlots, ARROWS, candidatesFor, fillGrid, isComplete, wordOf };
+  return { ALPHA, NL, code, normalize, parseWordList, mergeWordLists, WordIndex, computeSlots, geoFromSlots, swedishSlots, ARROWS, candidatesFor, fillGrid, isComplete, wordOf };
 }
 
 function GridEngineWorkerMain(E) {
@@ -377,9 +390,7 @@ function GridEngineWorkerMain(E) {
     const m = e.data;
     try {
       if (m.type === "load") {
-        const map = E.parseWordList(m.text);
-        for (const [w, s] of m.custom || []) map.set(w, s);
-        index = new E.WordIndex(map);
+        index = new E.WordIndex(E.mergeWordLists(m.texts, m.custom || []));
         index.setMinScore(m.minScore);
         self.postMessage({ type: "loaded" });
       } else if (m.type === "minScore") {
