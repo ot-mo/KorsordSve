@@ -2,13 +2,19 @@
 
 A crossword construction app modeled on **Ingrid 0.7.5** ("Your crossword pal™"), built from a static analysis of the installed app with [REA: Reverse Engineer Anything](https://github.com/morluto/rea).
 
+**Open the app: https://ot-mo.github.io/KorsordSve/**
+
 ## Run it
+
+The link above runs the latest version straight from GitHub Pages. Every push to `main` republishes the `app/` folder through `.github/workflows/pages.yml`. Projects, your added words and a loaded word list are saved in the browser you use.
+
+To run it from your own computer instead:
 
 ```bash
 git clone https://github.com/ot-mo/KorsordSve.git
 ```
 
-Then open `app/index.html` in Chrome or Edge. Projects, your added words and a loaded word list are saved in that browser.
+Then open `app/index.html` in Chrome or Edge.
 
 If autofill feels slow when the page is opened straight from disk, serve it from the `KorsordSve` folder instead:
 
