@@ -161,7 +161,7 @@ function newProject(title, w, h, symmetry = "rotational", style = "american") {
     id: uid(), title: title || "Untitled puzzle", author: "", copyright: "", notes: "",
     w, h, symmetry: style === "swedish" ? "None" : symmetry, style,
     blocks: new Array(n).fill(0), letters: new Array(n).fill(""), pencil: new Array(n).fill(""),
-    circles: new Array(n).fill(0), clues: {}, sclues: {}, zones: new Array(n).fill(0), breaks: new Array(n).fill(0), images: [],
+    circles: new Array(n).fill(0), clues: {}, sclues: {}, zones: new Array(n).fill(0), breaks: new Array(n).fill(0), images: [], longArrows: [],
     created: Date.now(), modified: Date.now(),
   };
   if (style === "swedish") {
@@ -217,6 +217,7 @@ const inkCodes = () => project.letters.map(letterCode);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 function clueOf(s) {
+  if (isSv() && s.arrowId) { const a = (project.longArrows || []).find((x) => x.id === s.arrowId); return a ? a.text || "" : ""; }
   if (isSv()) { const q = (project.sclues[s.clueCell] || [])[s.clueIdx]; return q ? q.text : ""; }
   return project.clues[clueKey(s)] || "";
 }
@@ -250,11 +251,16 @@ function recomputeGeo() {
   if (isSv()) {
     const open = Array.from({ length: w * h }, (_, i) => isLetterCell(i));
     const { defs, problems } = E.swedishSlots(w, h, open, project.sclues, project.breaks);
+    for (const a of project.longArrows || []) {
+      const ans = a.answer ? arrowAnswerCells(a) : null;
+      if (ans) defs.push({ ...ans, arrowId: a.id, arrow: ans.dir === "A" ? "right" : "down" });
+    }
+    defs.sort((x, y) => x.cells[0] - y.cells[0] || (x.dir === "A" ? -1 : 1));
     geo = E.geoFromSlots(w, h, defs);
     geo.problems = problems;
     geo.arrowsAt = new Map();
     for (const s of geo.slots) {
-      if (project.blocks[s.clueCell] === 3) continue; // a thick arrow square already shows its arrow
+      if (s.arrowId || project.blocks[s.clueCell] === 3) continue; // long and thick arrows draw their own
       const list = geo.arrowsAt.get(s.cells[0]) || [];
       list.push(s.arrow);
       geo.arrowsAt.set(s.cells[0], list);
@@ -322,11 +328,11 @@ function saveSoon() {
 
 const snapshot = () => JSON.stringify({
   b: project.blocks, l: project.letters, p: project.pencil, c: project.circles, k: project.clues,
-  q: project.sclues, z: project.zones, br: project.breaks, im: project.images,
+  q: project.sclues, z: project.zones, br: project.breaks, im: project.images, la: project.longArrows,
 });
 function restore(s) {
   const o = JSON.parse(s);
-  Object.assign(project, { blocks: o.b, letters: o.l, pencil: o.p, circles: o.c, clues: o.k, sclues: o.q, zones: o.z, breaks: o.br, images: o.im });
+  Object.assign(project, { blocks: o.b, letters: o.l, pencil: o.p, circles: o.c, clues: o.k, sclues: o.q, zones: o.z, breaks: o.br, images: o.im, longArrows: o.la || [] });
   recomputeGeo();
 }
 
@@ -609,6 +615,45 @@ function setKind(kind, cells = regionCells()) {
   }, { structural: true });
 }
 
+// Every square a long arrow passes over, bends included.
+function arrowPathCells(a) {
+  const out = [];
+  (a.cells || []).forEach((i, k) => {
+    if (k === 0) { out.push(i); return; }
+    const prev = a.cells[k - 1];
+    const [dr, dc] = stepDir(prev, i);
+    let r = rowOf(prev), c = colOf(prev);
+    while (r !== rowOf(i) || c !== colOf(i)) { r += dr; c += dc; out.push(idx(r, c)); }
+  });
+  return out;
+}
+
+// Space: wipe the square (or the selected area) back to an empty letter square. Removes the letter,
+// pencil, clue/grey/thick arrow square, yellow, bars, triangles and circle, plus any picture
+// covering it and any long arrow passing over it. Undo brings it all back.
+function clearSquares(cells) {
+  const set = new Set(cells);
+  const pics = (project.images || []).filter((im) => cells.some((i) => covered[i] && pictureAt(i) === im));
+  const arrows = (project.longArrows || []).filter((a) => arrowPathCells(a).some((i) => set.has(i)));
+  mutate(() => {
+    for (const i of cells) {
+      project.letters[i] = ""; project.pencil[i] = ""; project.circles[i] = 0;
+      if (isSv()) {
+        project.blocks[i] = 0;
+        delete project.sclues[i];
+        project.zones[i] = 0;
+        project.breaks[i] = 0;
+      } else if (project.blocks[i]) {
+        for (const [rr, cc] of partners(rowOf(i), colOf(i))) project.blocks[idx(rr, cc)] = 0;
+      }
+    }
+    project.images = (project.images || []).filter((im) => !pics.includes(im));
+    project.longArrows = (project.longArrows || []).filter((a) => !arrows.includes(a));
+  }, { structural: true });
+  if (selPic && !project.images.some((im) => im.id === selPic)) selPic = null;
+  if (selArrow && !project.longArrows.some((a) => a.id === selArrow)) selArrow = null;
+}
+
 // The same edge can carry a word-end bar or a sentence triangle, not both.
 function toggleEdgeMark(kind) {
   const i = idx(sel.r, sel.c);
@@ -685,6 +730,14 @@ function nextSlot(delta) {
 }
 
 function onGridKey(e) {
+  if (drawing) {
+    if (e.key === "Enter") { e.preventDefault(); finishArrow(); return; }
+    if (e.key === "Escape") { e.preventDefault(); cancelArrow(); return; }
+    if (e.key === "Backspace") { e.preventDefault(); drawing.cells.pop(); render(); return; }
+    if (e.key === " ") { e.preventDefault(); return; }
+  }
+  if (selArrow && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); removeArrow(); return; }
+  if (selArrow && e.key === "Escape") { e.preventDefault(); selArrow = null; render(); return; }
   const mod = e.ctrlKey || e.metaKey;
   if (mod) {
     if (e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
@@ -718,7 +771,12 @@ function onGridKey(e) {
     dir = dir === "A" ? "D" : "A"; render();
   } else if (k === "Backspace") {
     e.preventDefault(); erase(false);
-  } else if (k === "Delete" || k === " ") {
+  } else if (k === " ") {
+    e.preventDefault();
+    const area = !!anchor;
+    clearSquares(area ? regionCells() : [idx(sel.r, sel.c)]);
+    if (!area) { advance(1); render(); }
+  } else if (k === "Delete") {
     e.preventDefault(); erase(true);
   } else if (k === ".") {
     e.preventDefault();
@@ -797,6 +855,213 @@ async function loadProjectImages() {
 }
 
 // ---------- rendering ----------
+// ---------- long arrows ----------
+// Free arrows drawn over the grid and pictures. They pass through the squares you click,
+// bend at right angles, and end with the tip on the edge of the last square. An arrow can
+// also start an answer (like a thick arrow square) running on from its last square.
+let drawing = null;   // {cells, thick} while an arrow is being drawn
+let hoverCell = null;
+let selArrow = null;  // id of the selected long arrow
+const SVGNS = "http://www.w3.org/2000/svg";
+const ARROW_STYLE = { thin: { stroke: 5, len: 26, half: 15 }, thick: { stroke: 13, len: 38, half: 26 } };
+const rowOf = (i) => Math.floor(i / project.w), colOf = (i) => i % project.w;
+const stepDir = (a, b) => [Math.sign(rowOf(b) - rowOf(a)), Math.sign(colOf(b) - colOf(a))];
+
+// Adds a corner wherever two clicked squares share neither row nor column (across first, then down),
+// and drops points in the middle of a straight run.
+function routeCells(cells) {
+  const pts = [];
+  for (const i of cells) {
+    const prev = pts[pts.length - 1];
+    if (prev === i) continue;
+    if (prev != null && rowOf(prev) !== rowOf(i) && colOf(prev) !== colOf(i)) pts.push(idx(rowOf(prev), colOf(i)));
+    pts.push(i);
+  }
+  return pts.filter((i, k) => {
+    if (k === 0 || k === pts.length - 1) return true;
+    const [a, b] = stepDir(pts[k - 1], i), [c, d] = stepDir(i, pts[k + 1]);
+    return a !== c || b !== d;
+  });
+}
+
+function longArrowShape(route, thick) {
+  const st = thick ? ARROW_STYLE.thick : ARROW_STYLE.thin;
+  const pts = route.map((i) => [colOf(i) * 100 + 50, rowOf(i) * 100 + 50]);
+  const [dr, dc] = stepDir(route[route.length - 2], route[route.length - 1]);
+  const [ex, ey] = pts[pts.length - 1];
+  const tip = [ex - dc * 50, ey - dr * 50];                 // where it enters the last square
+  const base = [tip[0] - dc * st.len, tip[1] - dr * st.len];
+  const line = [...pts.slice(0, -1), [base[0] + dc * 2, base[1] + dr * 2]];
+  return {
+    d: "M" + line.map((p) => p.join(" ")).join(" L"),
+    head: [tip, [base[0] - dr * st.half, base[1] + dc * st.half], [base[0] + dr * st.half, base[1] - dc * st.half]],
+    stroke: st.stroke,
+  };
+}
+
+// The answer a long arrow starts: from its last square in the arrow's final direction (right or down).
+function arrowAnswerCells(a) {
+  if (!a.cells || a.cells.length < 2) return null;
+  const [dr, dc] = stepDir(a.cells[a.cells.length - 2], a.cells[a.cells.length - 1]);
+  if (!((dr === 0 && dc === 1) || (dr === 1 && dc === 0))) return null;
+  const d = dc === 1 ? "A" : "D";
+  const cells = [];
+  let r = rowOf(a.cells[a.cells.length - 1]), c = colOf(a.cells[a.cells.length - 1]);
+  while (inBounds(r, c) && isLetterCell(idx(r, c))) {
+    const j = idx(r, c);
+    cells.push(j);
+    if (project.breaks[j] & (d === "A" ? 1 : 2)) break;
+    if (d === "A") c++; else r++;
+  }
+  return cells.length >= 2 ? { dir: d, cells } : null;
+}
+
+let arrowSig = "";
+function renderLongArrows() {
+  const g = $("grid");
+  let svg = g.querySelector(".arrow-layer");
+  if (!svg) {
+    svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("class", "arrow-layer");
+    svg.setAttribute("aria-hidden", "true");
+    g.appendChild(svg);
+    arrowSig = "";
+  }
+  const draft = drawing ? routeCells(hoverCell != null ? [...drawing.cells, hoverCell] : drawing.cells) : null;
+  const sig = JSON.stringify([project.w, project.h, project.longArrows, selArrow, draft, drawing && drawing.thick]);
+  if (sig === arrowSig) return;
+  arrowSig = sig;
+  svg.setAttribute("viewBox", `0 0 ${project.w * 100} ${project.h * 100}`);
+  svg.style.gridArea = "1 / 1 / -1 / -1";
+  const one = (route, thick, cls, id) => {
+    if (route.length === 1 && cls === "draft") return `<circle class="la-dot" cx="${colOf(route[0]) * 100 + 50}" cy="${rowOf(route[0]) * 100 + 50}" r="12"/>`;
+    if (route.length < 2) return "";
+    const { d, head, stroke } = longArrowShape(route, thick);
+    return `<g class="la ${cls}"${id ? ` data-arrow="${id}"` : ""}><path class="hit" d="${d}"/><path class="line" d="${d}" stroke-width="${stroke}"/><polygon class="head" points="${head.map((p) => p.join(",")).join(" ")}"/></g>`;
+  };
+  svg.innerHTML = (project.longArrows || []).map((a) => one(a.cells, a.thick, a.id === selArrow ? "sel" : "", a.id)).join("")
+    + (draft ? one(draft, drawing.thick, "draft") : "");
+}
+
+function startArrow() {
+  drawing = { cells: [], thick: !!store.get("gw.arrowThick", false) };
+  hoverCell = null; selArrow = null; selPic = null; anchor = null;
+  $("grid").focus();
+  render();
+}
+function cancelArrow() { drawing = null; hoverCell = null; render(); }
+function finishArrow() {
+  const route = drawing ? routeCells(drawing.cells) : [];
+  const thick = !!(drawing && drawing.thick);
+  drawing = null; hoverCell = null;
+  if (route.length < 2) { toast("An arrow needs at least two squares: click where it starts, then the square it points into."); render(); return; }
+  const a = { id: uid(), cells: route, thick, text: "", answer: false };
+  a.answer = !!arrowAnswerCells(a);
+  mutate(() => { project.longArrows.push(a); }, { structural: true });
+  selArrow = a.id;
+  render();
+}
+const selectedArrow = () => (project.longArrows || []).find((a) => a.id === selArrow);
+function updateArrow(fn) {
+  const a = selectedArrow();
+  if (a) mutate(() => fn(a), { structural: true });
+}
+function removeArrow() {
+  if (!selectedArrow()) return;
+  mutate(() => { project.longArrows = project.longArrows.filter((a) => a.id !== selArrow); }, { structural: true });
+  selArrow = null;
+  render();
+}
+function setArrowClue(text, commit) {
+  const a = selectedArrow();
+  if (!a) return;
+  armClueUndo("la:" + a.id);
+  a.text = text;
+  if (commit) { clueUndoArmed = null; rememberClue(geo.slots.find((s) => s.arrowId === a.id), text.trim()); }
+  saveSoon();
+  render();
+}
+
+let laKey = "";
+function renderArrowEditor() {
+  const host = $("la-editor");
+  const a = selectedArrow();
+  host.hidden = !drawing && !a;
+  if (host.hidden) { laKey = ""; return; }
+  const canAnswer = a && !!arrowAnswerCells(a);
+  const key = drawing ? `draw|${drawing.thick}` : `${a.id}|${a.thick}|${a.answer}|${canAnswer}`;
+  const thickPick = (thick, onPick) => {
+    const box = document.createElement("div");
+    box.className = "row";
+    for (const [label, v] of [["Thin line", false], ["Thick line", true]]) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn small" + (thick === v ? " on" : ""); b.textContent = label;
+      b.setAttribute("aria-pressed", String(thick === v));
+      b.addEventListener("click", () => onPick(v));
+      box.appendChild(b);
+    }
+    return box;
+  };
+  const button = (label, cls, fn) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn small " + cls; b.textContent = label;
+    b.addEventListener("click", fn);
+    return b;
+  };
+  if (key !== laKey) {
+    laKey = key;
+    host.innerHTML = "";
+    if (drawing) {
+      const p = document.createElement("p");
+      p.className = "muted"; p.style.margin = "0"; p.style.fontSize = "13px";
+      p.innerHTML = "<b>Drawing a long arrow.</b> Click the squares it passes through, ending on the square it points into; bends are added for you. <kbd>Backspace</kbd> removes the last point, <kbd>Enter</kbd> or a double-click finishes, <kbd>Esc</kbd> cancels.";
+      host.appendChild(p);
+      const row = thickPick(drawing.thick, (v) => { drawing.thick = v; store.set("gw.arrowThick", v); render(); $("grid").focus(); });
+      row.appendChild(button("Finish arrow", "primary", () => { finishArrow(); $("grid").focus(); }));
+      row.appendChild(button("Cancel", "", () => { cancelArrow(); $("grid").focus(); }));
+      host.appendChild(row);
+    } else {
+      const row = thickPick(a.thick, (v) => updateArrow((x) => { x.thick = v; }));
+      row.appendChild(button("Point the other way", "", () => updateArrow((x) => { x.cells.reverse(); })));
+      row.appendChild(button("Remove arrow", "danger", () => { removeArrow(); $("grid").focus(); }));
+      host.appendChild(row);
+      const chk = document.createElement("label");
+      chk.className = "row"; chk.style.fontSize = "13px";
+      chk.innerHTML = `<input type="checkbox" ${a.answer && canAnswer ? "checked" : ""} ${canAnswer ? "" : "disabled"}> Starts an answer from the square it points into`;
+      chk.querySelector("input").addEventListener("change", (e) => updateArrow((x) => { x.answer = e.target.checked; }));
+      host.appendChild(chk);
+      if (!canAnswer) {
+        const n = document.createElement("span");
+        n.className = "muted"; n.style.fontSize = "12.5px";
+        n.textContent = "To start an answer, the arrow has to end pointing right or down into at least two letter squares.";
+        host.appendChild(n);
+      } else if (a.answer) {
+        const f = document.createElement("label");
+        f.className = "field";
+        f.textContent = "Clue for this answer (not printed in the grid, e.g. the picture caption)";
+        const ta = document.createElement("textarea");
+        ta.rows = 2; ta.dataset.la = "1"; ta.placeholder = "Bildtext eller ledtråd"; ta.value = a.text || "";
+        ta.addEventListener("input", () => setArrowClue(ta.value, false));
+        ta.addEventListener("change", () => setArrowClue(ta.value, true));
+        f.appendChild(ta);
+        host.appendChild(f);
+      }
+    }
+  } else if (a) {
+    const ta = host.querySelector("textarea[data-la]");
+    if (ta && document.activeElement !== ta && ta.value !== (a.text || "")) ta.value = a.text || "";
+  }
+}
+
+// Which square is under the pointer, even over a picture or an arrow.
+function cellFromPoint(e) {
+  const g = $("grid"), rect = g.getBoundingClientRect();
+  const border = (rect.width - g.clientWidth) / 2;
+  const c = Math.floor((e.clientX - rect.left - border) / (g.clientWidth / project.w));
+  const r = Math.floor((e.clientY - rect.top - border) / (g.clientHeight / project.h));
+  return inBounds(r, c) ? idx(r, c) : null;
+}
+
 let cellEls = [];
 let picSig = "";
 function buildGrid() {
@@ -808,6 +1073,7 @@ function buildGrid() {
   g.innerHTML = "";
   cellEls = [];
   picSig = "";
+  arrowSig = "";
   for (let i = 0; i < project.w * project.h; i++) {
     const d = document.createElement("div");
     d.className = "cell";
@@ -917,13 +1183,17 @@ function render() {
     if (aKey !== ce.aKey) { ce.aKey = aKey; ce.a.innerHTML = arrows ? arrows.map(cellArrowSvg).join("") : ""; }
   }
   renderImages();
+  renderLongArrows();
   fitClues();
+  $("grid").classList.toggle("drawing", !!drawing);
 
   // under the grid: clue square editor (Swedish) or the current entry's clue
   const onClueSquare = sv && hasClues(i0) && !covered[i0];
-  $("sq-editor").hidden = !onClueSquare;
-  $("clue-bar").hidden = onClueSquare;
-  if (onClueSquare) renderSquareEditor(i0);
+  renderArrowEditor();
+  const arrowPanel = !$("la-editor").hidden;   // the arrow panel replaces the clue editors
+  $("sq-editor").hidden = !onClueSquare || arrowPanel;
+  $("clue-bar").hidden = onClueSquare || arrowPanel;
+  if (onClueSquare && !arrowPanel) renderSquareEditor(i0);
   else if (slot) {
     $("cur-tag").textContent = slotTag(slot);
     const v = clueOf(slot);
@@ -952,6 +1222,8 @@ function render() {
   $("btn-break").classList.toggle("on", !!(project.breaks[i0] & barBit) && isLetterCell(i0));
   $("btn-dead-sq").classList.toggle("on", project.blocks[i0] === 2);
   $("btn-pic-del").disabled = !(selPic || covered[i0]);
+  $("btn-arrow").textContent = drawing ? "Finish arrow" : "Long arrow";
+  $("btn-arrow").classList.toggle("on", !!drawing);
 
   if (activeTab === "fill") renderFillSoon();
   if (activeTab === "clues") renderClues();
@@ -1197,7 +1469,12 @@ function renderClues() {
 }
 
 function setClue(s, text, commit) {
-  if (isSv()) {
+  if (isSv() && s.arrowId) {
+    const a = (project.longArrows || []).find((x) => x.id === s.arrowId);
+    if (!a) return;
+    armClueUndo("la:" + a.id);
+    a.text = text;
+  } else if (isSv()) {
     const q = (project.sclues[s.clueCell] || [])[s.clueIdx];
     if (!q) return;
     armClueUndo(`${s.clueCell}:${s.clueIdx}`);
@@ -1251,6 +1528,7 @@ function renderStats() {
     for (const [k, n] of starts) if (n > 1) issues.push(["bad", `${n} clues point at the same answer (row ${Math.floor(parseInt(k, 10) / project.w) + 1})`]);
     for (const [i, list] of Object.entries(project.sclues)) if (project.blocks[i] === 1 && !list.length) issues.push(["warn", `A clue square has no clue (row ${Math.floor(i / project.w) + 1}, column ${(i % project.w) + 1})`]);
     if (orphan.length) issues.push(["warn", `${orphan.length} letter square${orphan.length > 1 ? "s belong" : " belongs"} to no answer`]);
+    for (const a of project.longArrows || []) if (a.answer && !arrowAnswerCells(a)) issues.push(["warn", "A long arrow should start an answer, but it doesn't end pointing right or down into 2 or more letter squares"]);
     const unclued = words - clued;
     if (unclued) issues.push(["warn", `${unclued} answer${unclued > 1 ? "s have" : " has"} no clue text yet`]);
   } else {
@@ -1300,6 +1578,8 @@ function openProject(p) {
   if (!p.clues) p.clues = {};
   if (!p.sclues) p.sclues = {};
   if (!p.images) p.images = [];
+  if (!p.longArrows) p.longArrows = [];
+  drawing = null; hoverCell = null; selArrow = null;
   for (const im of p.images) if (im.src && !imgCache.has(im.id)) imgCache.set(im.id, im.src);
   undoStack = []; redoStack = []; clueSig = ""; sqKey = ""; anchor = null; selPic = null;
   recomputeGeo();
@@ -1512,7 +1792,10 @@ function exportCluesTsv() {
   const clean = (t) => t.replace(/[\t\n]/g, " ");
   const lines = isSv() ? ["Clue\tArrow\tRow\tColumn\tAnswer"] : ["Number\tDirection\tAnswer\tClue"];
   if (isSv()) {
-    for (const s of geo.slots) lines.push(`${clean(clueOf(s))}\t${s.arrow}\t${Math.floor(s.clueCell / project.w) + 1}\t${(s.clueCell % project.w) + 1}\t${slotText(s, "?")}`);
+    for (const s of geo.slots) {
+      const at = s.clueCell ?? s.cells[0];
+      lines.push(`${clean(clueOf(s))}\t${s.arrowId ? "long-arrow" : s.arrow}\t${Math.floor(at / project.w) + 1}\t${(at % project.w) + 1}\t${slotText(s, "?")}`);
+    }
   } else {
     for (const s of orderedClues()) lines.push(`${s.num}\t${dirName(s.dir)}\t${slotText(s, "?")}\t${clean(clueOf(s))}`);
   }
@@ -1547,7 +1830,8 @@ function importCluesTsv(text) {
         clue = r.length >= 4 ? r[3] : r[2];
       } else { slot = byAnswer(r[0]); clue = r[1]; }
       if (!slot || !clue || !clue.trim()) continue;
-      if (isSv()) project.sclues[slot.clueCell][slot.clueIdx].text = clue.trim();
+      if (isSv() && slot.arrowId) { const a = project.longArrows.find((x) => x.id === slot.arrowId); if (a) a.text = clue.trim(); }
+      else if (isSv()) project.sclues[slot.clueCell][slot.clueIdx].text = clue.trim();
       else project.clues[clueKey(slot)] = clue.trim();
       n++;
     }
@@ -1632,6 +1916,9 @@ function printPuzzle(withSolution) {
       g.classList.toggle("blank", blank);
       g.querySelectorAll(".cell").forEach((c) => c.classList.remove("s", "h", "x", "qh", "rg", "bad"));
       g.querySelectorAll(".pic").forEach((c) => c.classList.remove("on"));
+      g.querySelectorAll(".la.sel").forEach((c) => c.classList.remove("sel"));
+      g.querySelectorAll(".la.draft, .la-dot").forEach((c) => c.remove());
+      g.classList.remove("drawing");
       return g.outerHTML;
     };
     html = head + copy(true);
@@ -1706,6 +1993,24 @@ function wire() {
     return cell && grid.contains(cell) ? +cell.dataset.i : null;
   };
   grid.addEventListener("mousedown", (e) => {
+    if (drawing) {
+      e.preventDefault();
+      const i = cellFromPoint(e);
+      if (i != null && drawing.cells[drawing.cells.length - 1] !== i) drawing.cells.push(i);
+      if (e.detail >= 2) finishArrow();
+      grid.focus();
+      render();
+      return;
+    }
+    const la = e.target.closest(".la");
+    if (la && la.dataset.arrow) {
+      e.preventDefault();
+      selArrow = la.dataset.arrow; selPic = null; anchor = null;
+      grid.focus();
+      render();
+      return;
+    }
+    selArrow = null;
     const pic = e.target.closest(".pic");
     if (pic) {
       e.preventDefault();
@@ -1739,6 +2044,11 @@ function wire() {
     render();
   });
   window.addEventListener("mousemove", (e) => {
+    if (drawing) {
+      const i = grid.contains(e.target) ? cellFromPoint(e) : null;
+      if (i !== hoverCell) { hoverCell = i; renderLongArrows(); }
+      return;
+    }
     if (!dragFrom || !(e.buttons & 1)) { dragFrom = null; return; }
     const i = cellAt(e);
     if (i == null) return;
@@ -1768,6 +2078,7 @@ function wire() {
   $("btn-zone").addEventListener("click", () => { toggleZone(); grid.focus(); });
   $("btn-break").addEventListener("click", () => { toggleBreak(); grid.focus(); });
   $("btn-tri").addEventListener("click", () => { toggleTriangle(); grid.focus(); });
+  $("btn-arrow").addEventListener("click", () => { if (drawing) finishArrow(); else startArrow(); grid.focus(); });
   $("btn-thick").addEventListener("click", () => {
     if (project.blocks[idx(sel.r, sel.c)] === 3) { setKind(0); grid.focus(); return; }
     setKind(3);

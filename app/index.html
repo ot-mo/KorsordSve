@@ -282,6 +282,15 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
 .pic img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
 .pic.on { outline: 3px solid var(--accent); outline-offset: -3px; }
 .pic .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.arrow-layer { position: relative; z-index: 3; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.la .line { stroke: var(--ink); fill: none; stroke-linejoin: miter; stroke-miterlimit: 8; stroke-linecap: butt; }
+.la .head, .la-dot { fill: var(--ink); }
+.la .hit { stroke: transparent; stroke-width: 36; fill: none; pointer-events: stroke; cursor: pointer; }
+.la.sel .line { stroke: var(--accent); }
+.la.sel .head { fill: var(--accent); }
+.la.draft, .la-dot { opacity: .55; }
+.la.draft .hit, .grid.drawing .la .hit { pointer-events: none; }
+.grid.drawing, .grid.drawing .cell, .grid.drawing .pic { cursor: crosshair; }
 
 .sq-ed { width: 100%; max-width: 680px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
 .sq-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
@@ -387,6 +396,7 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
       <button class="btn small only-sv" id="btn-break" title="Thick bar ending the word after this square (-)">Word end</button>
       <button class="btn small only-sv" id="btn-tri" title="Small triangle after this square: the sentence continues with its next word (&gt;)">Triangle ▸</button>
       <button class="btn small only-sv" id="btn-thick" title="Thick arrow square: starts an answer whose clue is elsewhere, like a picture caption">Thick arrow</button>
+      <button class="btn small only-sv" id="btn-arrow" title="Draw a long arrow that can bend: click the squares it passes through">Long arrow</button>
       <button class="btn small only-sv" id="btn-pic" title="Put a picture over the selected squares">Picture…</button>
       <button class="btn small only-sv danger" id="btn-pic-del" title="Remove the selected picture">Remove picture</button>
       <span class="spacer"></span>
@@ -394,13 +404,14 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
       <button class="btn small" id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
     </div>
     <div class="grid-wrap"><div class="grid" id="grid" tabindex="0" role="grid" aria-label="Crossword grid"></div></div>
+    <div class="sq-ed" id="la-editor" hidden></div>
     <div class="sq-ed" id="sq-editor" hidden></div>
     <div class="clue-bar" id="clue-bar">
       <span class="tag" id="cur-tag">1A</span>
       <input id="cur-clue" placeholder="Write a clue" aria-label="Clue for the current entry">
     </div>
-    <p class="hint only-sv">Drag across squares (or Shift+click) to select an area for <b>Yellow</b> or <b>Picture…</b>. <kbd>.</kbd> makes a clue square, <kbd>#</kbd> a grey square, <kbd>-</kbd> a word-end bar, <kbd>&gt;</kbd> a small triangle that splits a sentence into words (the answer goes on, but each word must be in the word lists). <b>Thick arrow</b> turns a square into a big arrow that starts an answer, for example from a picture caption. Select a clue square to write its clue and pick the arrow; press Enter in a clue for a new line and type - to split a long word. Answers run from the arrow until the next clue square, picture, edge or bar.</p>
-    <p class="hint only-am">Type letters to fill. <kbd>.</kbd> toggles a black square, <kbd>*</kbd> a circle. <kbd>Tab</kbd> jumps to the next entry, <kbd>Enter</kbd> or a second click switches direction, <kbd>Space</kbd> erases forward. Pencil letters (grey) come from autofill.</p>
+    <p class="hint only-sv">Drag across squares (or Shift+click) to select an area for <b>Yellow</b> or <b>Picture…</b>. <kbd>Space</kbd> clears everything on the square or selected area: letter, clue, yellow, bars, triangles, and any picture or long arrow on it (<kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes). <kbd>.</kbd> makes a clue square, <kbd>#</kbd> a grey square, <kbd>-</kbd> a word-end bar, <kbd>&gt;</kbd> a small triangle that splits a sentence into words (the answer goes on, but each word must be in the word lists). <b>Thick arrow</b> turns a square into a big arrow that starts an answer, for example from a picture caption. <b>Long arrow</b> draws an arrow across several squares: click the squares it passes through and it bends for you; click an arrow to change, turn or remove it. Select a clue square to write its clue and pick the arrow; press Enter in a clue for a new line and type - to split a long word. Answers run from the arrow until the next clue square, picture, edge or bar.</p>
+    <p class="hint only-am">Type letters to fill. <kbd>.</kbd> toggles a black square, <kbd>*</kbd> a circle. <kbd>Tab</kbd> jumps to the next entry, <kbd>Enter</kbd> or a second click switches direction, <kbd>Space</kbd> clears the square (or a selected area) completely, <kbd>Delete</kbd> only erases the letter. Pencil letters (grey) come from autofill.</p>
   </section>
 
   <aside class="side">
