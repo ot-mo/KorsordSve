@@ -1941,6 +1941,185 @@ function printPuzzle(withSolution) {
   window.print();
 }
 
+// ---------- image export (PNG) ----------
+// Draws the puzzle straight onto a canvas, so the image never depends on print settings.
+// Everything is drawn in a 100-units-per-square space, the same one the on-screen arrows use.
+const EXPORT_PX = 120;    // pixels per square: a 13-wide grid becomes about 1600 px wide
+const EXPORT_MARGIN = 30;
+
+// Turns the arrow markup used on screen (<path>/<polygon>) into canvas paths.
+function svgShapes(markup) {
+  const out = [];
+  markup.replace(/<(path|polygon)([^>]*)\/>/g, (m, tag, attrs) => {
+    if (tag === "path") { out.push({ path: new Path2D(attrs.match(/d="([^"]+)"/)[1]), fill: false }); return m; }
+    const pts = attrs.match(/points="([^"]+)"/)[1].trim().split(/\s+/).map((p) => p.split(",").map(Number));
+    const p2 = new Path2D();
+    pts.forEach(([x, y], k) => (k ? p2.lineTo(x, y) : p2.moveTo(x, y)));
+    p2.closePath();
+    out.push({ path: p2, fill: true });
+    return m;
+  });
+  return out;
+}
+
+function drawShapes(ctx, markup, x, y, S, strokeWidth, join = "miter", cap = "square") {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(S / 100, S / 100);
+  ctx.fillStyle = "#000"; ctx.strokeStyle = "#000";
+  ctx.lineWidth = strokeWidth; ctx.lineJoin = join; ctx.lineCap = cap;
+  for (const s of svgShapes(markup)) { if (s.fill) ctx.fill(s.path); else ctx.stroke(s.path); }
+  ctx.restore();
+}
+
+// Fits clue text into its box the way the screen does: uppercase, line breaks only at spaces,
+// after hyphens and where you pressed Enter, shrinking until every line fits.
+function drawClueText(ctx, text, x, y, w, h, S) {
+  const paras = text.toUpperCase().trim().split(/\n/);
+  const maxW = w * 0.9, maxH = h * 0.94;
+  const font = (size) => `600 ${size}px "Archivo Narrow", "Arial Narrow", Arial, sans-serif`;
+  const wrap = (size) => {
+    ctx.font = font(size);
+    const lines = [];
+    for (const para of paras) {
+      let line = "";
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        word.split(/(?<=-)/).forEach((piece, k) => {
+          const next = line + (k === 0 && line ? " " : "") + piece;
+          if (line && ctx.measureText(next).width > maxW) { lines.push(line); line = piece; }
+          else line = next;
+        });
+      }
+      lines.push(line);
+    }
+    return lines;
+  };
+  let lo = 0.06 * S, hi = 0.2 * S, best = wrap(lo);
+  for (let k = 0; k < 10; k++) {
+    const mid = (lo + hi) / 2, lines = wrap(mid);
+    const fits = lines.length * mid * 1.04 <= maxH && lines.every((l) => ctx.measureText(l).width <= maxW);
+    if (fits) { lo = mid; best = lines; } else hi = mid;
+  }
+  ctx.font = font(lo);
+  ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const lh = lo * 1.04, top = y + h / 2 - (best.length * lh) / 2 + lh / 2;
+  best.forEach((l, k) => ctx.fillText(l, x + w / 2, top + k * lh));
+}
+
+// Like the screen's object-fit: cover. Pictures without a built-in size (some SVG drawings)
+// are first drawn at the picture's own aspect ratio, then cropped like any photo.
+function drawCover(ctx, img, x, y, w, h) {
+  let src = img, iw = img.naturalWidth, ih = img.naturalHeight;
+  if (!iw || !ih || /^data:image\/svg/.test(img.src)) {
+    const vb = /viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/.exec(decodeURIComponent(img.src));
+    iw = vb ? +vb[1] : w; ih = vb ? +vb[2] : h;
+    const k = Math.max(w / iw, h / ih) * 2;
+    const off = document.createElement("canvas");
+    off.width = Math.round(iw * k); off.height = Math.round(ih * k);
+    off.getContext("2d").drawImage(img, 0, 0, off.width, off.height);
+    src = off; iw = off.width; ih = off.height;
+  }
+  const r = Math.max(w / iw, h / ih), sw = w / r, sh = h / r;
+  ctx.drawImage(src, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
+}
+
+async function exportImage(withLetters) {
+  const S = EXPORT_PX, M = EXPORT_MARGIN, sv = isSv();
+  const W = project.w * S, H = project.h * S;
+  const cv = document.createElement("canvas");
+  cv.width = W + 2 * M; cv.height = H + 2 * M;
+  const ctx = cv.getContext("2d");
+  toast("Making the image…");
+  try {
+    await Promise.all(['600 20px "Archivo Narrow"', '600 20px "Libre Franklin"', '500 20px "Libre Franklin"'].map((f) => document.fonts.load(f)));
+  } catch { /* falls back to system fonts */ }
+  const pics = await Promise.all((project.images || []).map((im) => new Promise((res) => {
+    const src = imgCache.get(im.id) || im.src;
+    if (!src) return res(null);
+    const img = new Image();
+    img.onload = () => res({ im, img });
+    img.onerror = () => res(null);
+    img.src = src;
+  })));
+
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.translate(M, M);
+  const X = (i) => colOf(i) * S, Y = (i) => rowOf(i) * S;
+  const n = project.w * project.h;
+
+  // squares
+  for (let i = 0; i < n; i++) {
+    if (covered[i]) continue;
+    const b = project.blocks[i];
+    ctx.fillStyle = sv ? (b === 2 ? "#c8c8c8" : project.zones[i] ? "#ffe14d" : "#fff") : b ? "#000" : "#fff";
+    ctx.fillRect(X(i), Y(i), S, S);
+  }
+  for (const p of pics) if (p) drawCover(ctx, p.img, p.im.c * S, p.im.r * S, p.im.w * S, p.im.h * S);
+
+  // grid lines (pictures get one frame instead of lines across them)
+  ctx.strokeStyle = "#000"; ctx.lineWidth = 2;
+  for (let i = 0; i < n; i++) if (!covered[i]) ctx.strokeRect(X(i), Y(i), S, S);
+  for (const im of project.images || []) ctx.strokeRect(im.c * S, im.r * S, im.w * S, im.h * S);
+
+  // contents
+  for (let i = 0; i < n; i++) {
+    if (covered[i]) continue;
+    const b = project.blocks[i], x = X(i), y = Y(i);
+    if (sv && b === 1) {
+      const clues = (project.sclues[i] || []).filter((q) => q.text.trim());
+      clues.forEach((q, k) => drawClueText(ctx, q.text, x, y + (k * S) / clues.length, S, S / clues.length, S));
+      if (clues.length === 2) { ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y + S / 2); ctx.lineTo(x + S, y + S / 2); ctx.stroke(); }
+      continue;
+    }
+    if (sv && b === 3) {
+      const a = ((project.sclues[i] || [])[0] || {}).arrow || "right";
+      drawShapes(ctx, THICK_ARROW[a] || "", x + 0.06 * S, y + 0.06 * S, 0.88 * S, 15, "miter", "butt");
+      continue;
+    }
+    if (b) continue;
+    if (sv) {
+      const marks = [...(geo.arrowsAt.get(i) || [])];
+      if (project.breaks[i] & 4) marks.push("tri-r");
+      if (project.breaks[i] & 8) marks.push("tri-b");
+      for (const m of marks) drawShapes(ctx, CELL_ARROW[m], x, y, S, 5);
+      ctx.fillStyle = "#000";
+      if (project.breaks[i] & 1) ctx.fillRect(x + S - 0.045 * S, y, 0.09 * S, S);
+      if (project.breaks[i] & 2) ctx.fillRect(x, y + S - 0.045 * S, S, 0.09 * S);
+    } else {
+      if (geo.numbers[i]) {
+        ctx.fillStyle = "#000"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.font = `500 ${Math.round(0.27 * S)}px "Libre Franklin", Arial, sans-serif`;
+        ctx.fillText(String(geo.numbers[i]), x + 0.04 * S, y + 0.03 * S);
+      }
+      if (project.circles[i]) { ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x + S / 2, y + S / 2, S * 0.46, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    if (withLetters && eff(i)) {
+      ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = `600 ${Math.round(0.6 * S)}px "Libre Franklin", Arial, sans-serif`;
+      ctx.fillText(eff(i), x + S / 2, y + 0.58 * S);
+    }
+  }
+
+  // long arrows on top
+  for (const a of project.longArrows || []) {
+    if (!a.cells || a.cells.length < 2) continue;
+    const { d, head, stroke } = longArrowShape(a.cells, a.thick);
+    const pts = head.map((p) => p.join(",")).join(" ");
+    drawShapes(ctx, `<path d="${d}"/><polygon class="head" points="${pts}"/>`, 0, 0, 100, stroke, "miter", "butt");
+  }
+
+  // outer frame
+  ctx.lineWidth = 6;
+  ctx.strokeRect(0, 0, W, H);
+
+  const name = `${slug()}${withLetters ? (sv ? "-losning" : "-solution") : ""}.png`;
+  cv.toBlob((blob) => {
+    if (!blob) { toast("The image couldn't be made. Try again, or use Print instead."); return; }
+    download(name, blob, "image/png");
+  }, "image/png");
+}
+
 // ---------- wiring ----------
 function setTab(name) {
   activeTab = name;
@@ -2138,6 +2317,7 @@ function wire() {
   });
 
   const actions = {
+    "export-png": () => exportImage(false), "export-png-solution": () => exportImage(true),
     "export-puz": exportPuz, "export-ipuz": exportIpuz, "export-clues-tsv": exportCluesTsv, "export-grid-tsv": exportGridTsv,
     "export-json": exportProjectJson,
     "import-clues-tsv": () => pickFile(".tsv,.txt,text/tab-separated-values", importCluesTsv),

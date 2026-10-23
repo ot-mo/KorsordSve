@@ -43,6 +43,7 @@ Choose **Swedish crossword** under Projects → New project, or open the Swedish
 - **Pictures:** drag across squares (or Shift+click), then **Picture…** to place an image over that area.
 - **Yellow zones:** select squares and press **Yellow**, for example for the solution word.
 - Fill suggestions and autofill work on the arrow-defined answers with Å, Ä and Ö.
+- **Save as image:** Import / Export → **Puzzle as image (.png)** or **Solution as image (.png)** saves a PNG of the grid with clues, arrows, triangles, bars, yellow zones and pictures, 120 pixels per square. It doesn't go through the print dialog, so nothing goes missing.
 - **Print** prints the grid as drawn, with clues, arrows, pictures and yellow zones, plus an optional solution page. Choose "Save as PDF" in the print dialog to get a file. .puz and .ipuz can't hold this layout, so they stay American-only.
 
 ## What REA found in Ingrid

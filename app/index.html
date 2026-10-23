@@ -334,8 +334,11 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
   .pclues p { margin: 0 0 2pt; break-inside: avoid; }
   .pclues section { break-inside: avoid-column; margin-bottom: 6pt; }
   .pbreak { break-before: page; }
-  #print-area .grid { width: 100%; max-width: min(186mm, calc(245mm * var(--w) / var(--h))); border-color: #000; background: #000; --qbg: #fff; --dead: #c8c8c8; --zone: #ffe14d; --ink: #000; --cell: #fff; }
+  /* Lines are real borders here, not 1px gaps: gaps vanish when the print dialog scales the page.
+     The size keeps the whole grid on one A4 or US Letter page. */
+  #print-area .grid { width: 100%; max-width: min(186mm, calc(222mm * var(--w) / var(--h))); break-inside: avoid; gap: 0; border: 1.5pt solid #000; background: #fff; --qbg: #fff; --dead: #c8c8c8; --zone: #ffe14d; --ink: #000; --cell: #fff; }
   #print-area .grid .cell { cursor: default; }
+  #print-area .grid .cell, #print-area .grid .pic { border-right: .75pt solid #000; border-bottom: .75pt solid #000; }
   #print-area .grid.blank .l { display: none; }
   #print-area .grid .qt.empty { visibility: hidden; }
   #print-area .grid .cell.q .qt { color: #000; }
@@ -361,6 +364,8 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
       <summary class="btn">Import / Export</summary>
       <div class="menu-list">
         <div class="lbl">Export</div>
+        <button data-act="export-png">Puzzle as image (.png)</button>
+        <button data-act="export-png-solution">Solution as image (.png)</button>
         <button data-act="export-puz">Across Lite (.puz)</button>
         <button data-act="export-ipuz">ipuz (.ipuz)</button>
         <button data-act="export-clues-tsv">Clues as spreadsheet (.tsv)</button>
