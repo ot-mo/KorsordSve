@@ -311,6 +311,13 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
 #print-area { display: none; }
 @media print {
   @page { margin: 14mm; }
+  /* Swedish pages bring their own margins; a zero page margin also keeps the browser's header and footer off. */
+  @page korsord { margin: 0; }
+  /* Grid lines, grey squares and yellow zones are backgrounds: print them even when the dialog's
+     "Background graphics" option is off. */
+  #print-area, #print-area * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #print-area .ppage-sv { page: korsord; padding: 12mm; break-after: page; }
+  #print-area .ppage-sv:last-child { break-after: auto; }
   body { background: #fff; color: #000; padding: 0; display: block; }
   body > *:not(#print-area) { display: none !important; }
   #print-area { display: block; font: 10pt/1.35 var(--font-ui); color: #000; }
@@ -327,11 +334,13 @@ body[data-style="swedish"] .only-am, body:not([data-style="swedish"]) .only-sv {
   .pclues p { margin: 0 0 2pt; break-inside: avoid; }
   .pclues section { break-inside: avoid-column; margin-bottom: 6pt; }
   .pbreak { break-before: page; }
-  #print-area .grid { width: 100%; max-width: 180mm; border-color: #000; background: #000; --qbg: #fff; --dead: #c8c8c8; --zone: #ffe14d; --ink: #000; --cell: #fff; }
+  #print-area .grid { width: 100%; max-width: min(186mm, calc(245mm * var(--w) / var(--h))); border-color: #000; background: #000; --qbg: #fff; --dead: #c8c8c8; --zone: #ffe14d; --ink: #000; --cell: #fff; }
   #print-area .grid .cell { cursor: default; }
   #print-area .grid.blank .l { display: none; }
   #print-area .grid .qt.empty { visibility: hidden; }
   #print-area .grid .cell.q .qt { color: #000; }
+  /* Print rasterizes text a little differently; a small margin keeps fitted clues from being cut off. */
+  #print-area .grid .qt { font-size: calc(var(--k, 0.2) * 0.9 * 100cqi / var(--w)); }
 }
 
 @media (max-width: 900px) {

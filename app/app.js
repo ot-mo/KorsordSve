@@ -1921,8 +1921,9 @@ function printPuzzle(withSolution) {
       g.classList.remove("drawing");
       return g.outerHTML;
     };
-    html = head + copy(true);
-    if (withSolution) html += `<div class="pbreak"><h1>${esc(project.title)}: lösning</h1>${copy(false)}</div>`;
+    // One padded section per printed page (the page itself has no margin, see @page korsord).
+    html = `<section class="ppage-sv">${head}${copy(true)}</section>`;
+    if (withSolution) html += `<section class="ppage-sv"><h1>${esc(project.title)}: lösning</h1>${copy(false)}</section>`;
   } else {
     const gridHtml = (letters) => {
       let out = `<div class="pgrid" style="grid-template-columns:repeat(${project.w},1fr)">`;
